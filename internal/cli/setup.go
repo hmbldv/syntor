@@ -259,13 +259,63 @@ func (w *SetupWizard) pullModels() error {
 		return err
 	}
 
-	return setup.EnsureModels(ctx, registry, func(model string, p inference.PullProgress) {
-		if p.Percent > 0 {
-			fmt.Printf("\r  Pulling %s: %.1f%%", model, p.Percent)
-		} else if p.Status != "" {
-			fmt.Printf("\r  %s: %s", model, p.Status)
+	// Get unique assigned models
+	assignedModels := registry.GetAssignedModels()
+
+	// Check which models need to be pulled
+	type modelStatus struct {
+		name     string
+		exists   bool
+		complete bool
+	}
+
+	models := make([]modelStatus, 0, len(assignedModels))
+	provider, _ := registry.GetDefaultProvider()
+
+	fmt.Println()
+	for _, modelID := range assignedModels {
+		hasModel, _ := provider.HasModel(ctx, modelID)
+		models = append(models, modelStatus{name: modelID, exists: hasModel, complete: hasModel})
+		if hasModel {
+			fmt.Printf("  \033[32m✓\033[0m %s (already installed)\n", modelID)
+		} else {
+			fmt.Printf("  \033[33m○\033[0m %s (pending)\n", modelID)
 		}
-	})
+	}
+
+	// Pull missing models
+	for i, m := range models {
+		if m.exists {
+			continue
+		}
+
+		// Show in-progress status
+		fmt.Printf("  \033[36m⟳\033[0m %s: starting...", m.name)
+
+		err := provider.PullModel(ctx, m.name, func(p inference.PullProgress) {
+			if p.Percent > 0 {
+				// Create progress bar
+				barWidth := 30
+				filled := int(p.Percent / 100 * float64(barWidth))
+				bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+				fmt.Printf("\r  \033[36m⟳\033[0m %s: [%s] %.1f%%", m.name, bar, p.Percent)
+			} else if p.Status != "" {
+				fmt.Printf("\r  \033[36m⟳\033[0m %s: %s          ", m.name, p.Status)
+			}
+		})
+
+		if err != nil {
+			fmt.Printf("\r  \033[31m✗\033[0m %s: failed - %v\n", m.name, err)
+			continue
+		}
+
+		// Mark complete
+		models[i].complete = true
+		fmt.Printf("\r  \033[32m✓\033[0m %s: complete                                        \n", m.name)
+	}
+
+	fmt.Println()
+	return nil
 }
 
 // prompt asks for user input with a default value

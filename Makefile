@@ -93,7 +93,8 @@ help:
 	@echo "  generate        Run go generate"
 
 ## build: Build all agent binaries
-build: $(BUILD_DIR)
+build:
+	@mkdir -p $(BUILD_DIR)
 	@echo "$(GREEN)Building all agents...$(NC)"
 	@for agent in $(AGENTS); do \
 		echo "Building $$agent-agent..."; \
@@ -103,15 +104,12 @@ build: $(BUILD_DIR)
 	@echo "$(GREEN)Build complete$(NC)"
 
 ## build-agent: Build specific agent (AGENT=name)
-build-agent: $(BUILD_DIR)
+build-agent:
 ifndef AGENT
 	$(error AGENT is not set. Usage: make build-agent AGENT=coordination)
 endif
 	@echo "$(GREEN)Building $(AGENT)-agent...$(NC)"
 	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(AGENT)-agent $(CMD_DIR)/$(AGENT)/*.go
-
-$(BUILD_DIR):
-	@mkdir -p $(BUILD_DIR)
 
 ## clean: Remove build artifacts
 clean:
@@ -311,7 +309,8 @@ topics-list:
 # SYNTOR CLI targets
 
 ## syntor-build: Build the syntor CLI
-syntor-build: $(BUILD_DIR)
+syntor-build:
+	@mkdir -p $(BUILD_DIR)
 	@echo "$(GREEN)Building syntor CLI...$(NC)"
 	$(GO) build $(GOFLAGS) \
 		-ldflags="-s -w -X 'github.com/syntor/syntor/internal/cli.Version=$(VERSION)' \

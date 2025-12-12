@@ -55,3 +55,4 @@ temp/
 
 # Local development data
 data/
+.syntor/

@@ -1,0 +1,26 @@
+apiVersion: syntor.dev/v1
+kind: ProjectContext
+metadata:
+  name: my-project
+  description: "Example project context configuration"
+spec:
+  values:
+    - "Code quality over speed"
+    - "Maintain test coverage above 80%"
+    - "Follow language idioms and best practices"
+    - "Write self-documenting code"
+  goals:
+    - "Implement the current feature set"
+    - "Maintain backwards compatibility"
+    - "Improve documentation"
+  conventions:
+    naming: "snake_case for files, CamelCase for types"
+    testing: "Table-driven tests preferred"
+    documentation: "GoDoc comments required for exports"
+    git: "Conventional commits, feature branches"
+    style: "Follow project linter configuration"
+  context:
+    repository: "https://github.com/example/project"
+    language: "Go 1.21+"
+    framework: "Standard library preferred"
+    architecture: "Clean architecture with domain separation"

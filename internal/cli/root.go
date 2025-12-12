@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/syntor/syntor/internal/cli/tui"
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/inference"
 )
@@ -15,9 +16,10 @@ var (
 	GitCommit = "unknown"
 
 	// Global flags
-	cfgFile   string
-	verbose   bool
+	cfgFile    string
+	verbose    bool
 	jsonOutput bool
+	simpleMode bool
 
 	// Global config
 	syntorConfig *config.SyntorConfig
@@ -70,6 +72,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.syntor/config.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output in JSON format")
+	rootCmd.PersistentFlags().BoolVar(&simpleMode, "simple", false, "use simple REPL mode (no TUI)")
 
 	// Add subcommands
 	rootCmd.AddCommand(versionCmd)
@@ -131,11 +134,17 @@ This will:
 
 // runInteractive starts the interactive REPL
 func runInteractive() error {
-	repl, err := NewREPL(syntorConfig)
-	if err != nil {
-		return fmt.Errorf("failed to initialize REPL: %w", err)
+	// Use simple REPL mode if --simple flag is set
+	if simpleMode {
+		repl, err := NewREPL(syntorConfig)
+		if err != nil {
+			return fmt.Errorf("failed to initialize REPL: %w", err)
+		}
+		return repl.Run()
 	}
-	return repl.Run()
+
+	// Default: use TUI mode
+	return tui.Run(syntorConfig)
 }
 
 func sendMessage(message string) error {

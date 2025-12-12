@@ -39,10 +39,19 @@ func NewClient(config ClientConfig) *Client {
 		config.Timeout = defaultTimeout
 	}
 
+	// Optimized transport for streaming with connection reuse
+	transport := &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  true, // Faster for streaming
+	}
+
 	return &Client{
 		baseURL: config.BaseURL,
 		httpClient: &http.Client{
-			Timeout: config.Timeout,
+			Timeout:   config.Timeout,
+			Transport: transport,
 		},
 	}
 }
@@ -495,8 +504,12 @@ func (c *Client) ChatStream(ctx context.Context, req inference.ChatRequest) (inf
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	// Use larger buffer for faster streaming reads
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // 64KB initial, 1MB max
+
 	return &chatStream{
-		scanner: bufio.NewScanner(resp.Body),
+		scanner: scanner,
 		body:    resp.Body,
 	}, nil
 }
