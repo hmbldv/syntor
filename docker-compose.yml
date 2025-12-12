@@ -242,12 +242,12 @@ services:
       - syntor-network
     restart: unless-stopped
 
-  documentation-agent:
+  docservice-agent:
     build:
       context: .
-      dockerfile: deployments/docker/Dockerfile.documentation
-    container_name: syntor-documentation-agent
-    hostname: documentation-agent
+      dockerfile: deployments/docker/Dockerfile.docservice
+    container_name: syntor-docservice-agent
+    hostname: docservice-agent
     depends_on:
       kafka:
         condition: service_healthy
@@ -257,8 +257,8 @@ services:
       - "8082:8080"
       - "9102:9090"
     environment:
-      SYNTOR_AGENT_ID: documentation-agent-1
-      SYNTOR_AGENT_NAME: documentation-agent
+      SYNTOR_AGENT_ID: docservice-agent-1
+      SYNTOR_AGENT_NAME: docservice-agent
       SYNTOR_AGENT_TYPE: service
       SYNTOR_ENVIRONMENT: local
       SYNTOR_LOG_LEVEL: debug
@@ -267,7 +267,7 @@ services:
       SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
     volumes:
       - ./configs:/app/configs:ro
-      - documentation-data:/app/docs
+      - docservice-data:/app/docs
     networks:
       - syntor-network
     restart: unless-stopped
@@ -366,7 +366,7 @@ volumes:
     name: syntor-prometheus-data
   grafana-data:
     name: syntor-grafana-data
-  documentation-data:
-    name: syntor-documentation-data
+  docservice-data:
+    name: syntor-docservice-data
   git-repos:
     name: syntor-git-repos

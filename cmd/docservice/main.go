@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/syntor/syntor/internal/documentation"
+	"github.com/syntor/syntor/internal/docservice"
 	"github.com/syntor/syntor/pkg/agent"
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/kafka"
@@ -26,7 +26,7 @@ func main() {
 		Name: config.GetEnv("SYNTOR_AGENT_NAME", "documentation-agent"),
 	}
 
-	docConfig := documentation.Config{
+	docConfig := docservice.Config{
 		AgentConfig:       agentConfig,
 		DocsPath:          config.GetEnv("SYNTOR_DOCS_PATH", "/app/docs"),
 		HeartbeatInterval: 30 * time.Second,
@@ -62,7 +62,7 @@ func main() {
 		fmt.Printf("Warning: Failed to connect to Redis: %v\n", err)
 	}
 
-	docAgent := documentation.New(docConfig, reg, kafkaClient)
+	docAgent := docservice.New(docConfig, reg, kafkaClient)
 
 	fmt.Println("Starting Documentation Agent...")
 	if err := docAgent.Start(ctx); err != nil {

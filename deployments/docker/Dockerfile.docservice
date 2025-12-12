@@ -13,8 +13,8 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
-    -o /build/documentation-agent \
-    ./cmd/documentation
+    -o /build/docservice-agent \
+    ./cmd/docservice
 
 # Runtime stage
 FROM alpine:3.19
@@ -26,10 +26,10 @@ RUN addgroup -g 1000 syntor && \
 
 WORKDIR /app
 
-# Create documentation storage directory
+# Create docservice storage directory
 RUN mkdir -p /app/docs && chown syntor:syntor /app/docs
 
-COPY --from=builder /build/documentation-agent /app/agent
+COPY --from=builder /build/docservice-agent /app/agent
 COPY --from=builder /build/configs/ /app/configs/
 
 RUN chown -R syntor:syntor /app
@@ -41,8 +41,8 @@ EXPOSE 8080 9090
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget -qO- http://localhost:8080/health || exit 1
 
-ENV SYNTOR_AGENT_TYPE=documentation \
-    SYNTOR_AGENT_NAME=documentation-agent \
+ENV SYNTOR_AGENT_TYPE=docservice \
+    SYNTOR_AGENT_NAME=docservice-agent \
     SYNTOR_ENVIRONMENT=local \
     SYNTOR_LOG_LEVEL=info \
     SYNTOR_LOG_FORMAT=json \

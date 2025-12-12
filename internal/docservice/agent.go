@@ -1,4 +1,4 @@
-package documentation
+package docservice
 
 import (
 	"context"
