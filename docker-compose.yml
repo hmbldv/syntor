@@ -122,6 +122,41 @@ services:
     restart: unless-stopped
 
   # ============================================================
+  # AI/Inference Services
+  # ============================================================
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: syntor-ollama
+    hostname: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_KEEP_ALIVE: 5m
+      OLLAMA_NUM_PARALLEL: 4
+      NVIDIA_VISIBLE_DEVICES: all
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - syntor-network
+    restart: unless-stopped
+    # NVIDIA GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ============================================================
   # Monitoring Stack
   # ============================================================
 
@@ -219,6 +254,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     ports:
       - "8081:8080"
       - "9101:9090"
@@ -236,6 +273,8 @@ services:
       SYNTOR_POSTGRES_PASSWORD: syntor_dev_password
       SYNTOR_POSTGRES_DATABASE: syntor
       SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      SYNTOR_OLLAMA_HOST: http://ollama:11434
+      SYNTOR_INFERENCE_MODEL: mistral:7b
     volumes:
       - ./configs:/app/configs:ro
     networks:
@@ -253,6 +292,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     ports:
       - "8082:8080"
       - "9102:9090"
@@ -265,6 +306,8 @@ services:
       SYNTOR_KAFKA_BROKERS: kafka:29092
       SYNTOR_REDIS_ADDRESS: redis:6379
       SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      SYNTOR_OLLAMA_HOST: http://ollama:11434
+      SYNTOR_INFERENCE_MODEL: deepseek-coder-v2:16b
     volumes:
       - ./configs:/app/configs:ro
       - docservice-data:/app/docs
@@ -283,6 +326,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     ports:
       - "8083:8080"
       - "9103:9090"
@@ -295,6 +340,8 @@ services:
       SYNTOR_KAFKA_BROKERS: kafka:29092
       SYNTOR_REDIS_ADDRESS: redis:6379
       SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      SYNTOR_OLLAMA_HOST: http://ollama:11434
+      SYNTOR_INFERENCE_MODEL: llama3.2:8b
     volumes:
       - ./configs:/app/configs:ro
       - git-repos:/app/repos
@@ -316,6 +363,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     environment:
       SYNTOR_AGENT_TYPE: worker
       SYNTOR_ENVIRONMENT: local
@@ -323,6 +372,9 @@ services:
       SYNTOR_KAFKA_BROKERS: kafka:29092
       SYNTOR_REDIS_ADDRESS: redis:6379
       SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      SYNTOR_OLLAMA_HOST: http://ollama:11434
+      SYNTOR_INFERENCE_MODEL: llama3.2:3b
+      SYNTOR_INFERENCE_MODEL_CODE: qwen2.5-coder:7b
     volumes:
       - ./configs:/app/configs:ro
     networks:
@@ -370,3 +422,5 @@ volumes:
     name: syntor-docservice-data
   git-repos:
     name: syntor-git-repos
+  ollama-data:
+    name: syntor-ollama-data

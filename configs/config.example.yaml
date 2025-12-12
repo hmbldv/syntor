@@ -1,0 +1,52 @@
+# SYNTOR Configuration Example
+# Copy this to ~/.syntor/config.yaml for global settings
+# or .syntor/config.yaml for project-specific settings
+
+# AI Inference Configuration
+inference:
+  # Default provider: ollama (local), anthropic (API), deepseek (API)
+  provider: ollama
+
+  # Ollama settings
+  ollama_host: http://localhost:11434
+
+  # API keys (optional, can also use environment variables)
+  # anthropic_api_key: sk-ant-...
+  # deepseek_api_key: sk-...
+
+  # Default model for all agents (fallback)
+  default_model: llama3.2:8b
+
+  # Per-agent model assignments
+  models:
+    # Coordination agent: orchestration and reasoning
+    coordination: mistral:7b
+
+    # Documentation agent: code analysis and docs
+    documentation: deepseek-coder-v2:16b
+
+    # Git agent: git operations and commit messages
+    git: llama3.2:8b
+
+    # Worker agent: general tasks
+    worker: llama3.2:3b
+
+    # Worker code agent: code-specific tasks
+    worker_code: qwen2.5-coder:7b
+
+  # Automatically pull missing models on startup
+  auto_pull: true
+
+# CLI Configuration
+cli:
+  # Color theme: dark, light, auto
+  theme: auto
+
+  # Preferred editor for file editing
+  editor: vim
+
+  # Auto-approve certain actions without confirmation
+  auto_approve: false
+
+  # Stream AI responses in real-time
+  stream_response: true

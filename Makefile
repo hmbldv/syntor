@@ -4,6 +4,10 @@
 .PHONY: docker-build docker-up docker-down docker-logs docker-clean
 .PHONY: infra-up infra-down agents-up agents-down
 .PHONY: dev dev-stop proto generate
+.PHONY: syntor syntor-build syntor-install ollama-up ollama-down
+
+# Alias for convenience
+syntor: syntor-build
 
 # Variables
 BINARY_NAME=syntor
@@ -33,6 +37,20 @@ help:
 	@echo "SYNTOR Multi-Agent System"
 	@echo ""
 	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  quickstart      Full quickstart (Ollama + syntor build + install)"
+	@echo ""
+	@echo "SYNTOR CLI targets:"
+	@echo "  syntor-build    Build the syntor CLI binary"
+	@echo "  syntor-install  Install syntor to /usr/local/bin"
+	@echo "  syntor-docker   Build syntor Docker image"
+	@echo ""
+	@echo "Ollama targets:"
+	@echo "  ollama-up       Start Ollama service"
+	@echo "  ollama-down     Stop Ollama service"
+	@echo "  ollama-pull     Pull default AI models"
+	@echo "  ollama-models   List installed models"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  build           Build all agent binaries"
@@ -289,3 +307,74 @@ topics-create:
 ## topics-list: List Kafka topics
 topics-list:
 	docker exec syntor-kafka kafka-topics --list --bootstrap-server localhost:9092
+
+# SYNTOR CLI targets
+
+## syntor-build: Build the syntor CLI
+syntor-build: $(BUILD_DIR)
+	@echo "$(GREEN)Building syntor CLI...$(NC)"
+	$(GO) build $(GOFLAGS) \
+		-ldflags="-s -w -X 'github.com/syntor/syntor/internal/cli.Version=$(VERSION)' \
+		          -X 'github.com/syntor/syntor/internal/cli.GitCommit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)' \
+		          -X 'github.com/syntor/syntor/internal/cli.BuildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)'" \
+		-o $(BUILD_DIR)/syntor ./cmd/syntor
+	@echo "$(GREEN)Binary: $(BUILD_DIR)/syntor$(NC)"
+
+## syntor-install: Install syntor CLI to /usr/local/bin
+syntor-install: syntor-build
+	@echo "$(GREEN)Installing syntor to /usr/local/bin...$(NC)"
+	@sudo cp $(BUILD_DIR)/syntor /usr/local/bin/syntor
+	@sudo chmod +x /usr/local/bin/syntor
+	@echo "$(GREEN)syntor installed successfully$(NC)"
+	@echo "Run 'syntor init' to configure first-time setup"
+
+## syntor-docker: Build syntor Docker image
+syntor-docker:
+	@echo "$(GREEN)Building syntor Docker image...$(NC)"
+	docker build -f deployments/docker/Dockerfile.syntor \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) \
+		--build-arg BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) \
+		-t syntor:$(VERSION) \
+		-t syntor:latest \
+		.
+
+# Ollama targets
+
+## ollama-up: Start Ollama service
+ollama-up:
+	@echo "$(GREEN)Starting Ollama service...$(NC)"
+	$(DOCKER_COMPOSE) up -d ollama
+	@echo "Waiting for Ollama to be ready..."
+	@sleep 5
+	@echo "$(GREEN)Ollama available at http://localhost:11434$(NC)"
+
+## ollama-down: Stop Ollama service
+ollama-down:
+	@echo "$(GREEN)Stopping Ollama service...$(NC)"
+	$(DOCKER_COMPOSE) stop ollama
+
+## ollama-pull: Pull default models
+ollama-pull:
+	@echo "$(GREEN)Pulling default models...$(NC)"
+	docker exec syntor-ollama ollama pull llama3.2:8b
+	docker exec syntor-ollama ollama pull mistral:7b
+	docker exec syntor-ollama ollama pull llama3.2:3b
+	@echo "$(GREEN)Models pulled successfully$(NC)"
+
+## ollama-models: List installed models
+ollama-models:
+	@echo "$(GREEN)Installed models:$(NC)"
+	docker exec syntor-ollama ollama list
+
+# Quick start target
+## quickstart: Full quickstart (Ollama + syntor)
+quickstart: ollama-up syntor-build syntor-install
+	@echo ""
+	@echo "$(GREEN)SYNTOR Quickstart Complete!$(NC)"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Run 'syntor init' to configure first-time setup"
+	@echo "  2. Run 'syntor models pull llama3.2:8b' to pull a model"
+	@echo "  3. Run 'syntor' to start interactive mode"
+	@echo ""
