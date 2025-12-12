@@ -1,0 +1,33 @@
+apiVersion: syntor.dev/v1
+kind: Tool
+metadata:
+  name: bash
+  description: "Execute shell commands"
+  category: shell
+spec:
+  parameters:
+    - name: command
+      type: string
+      description: "The bash command to execute"
+      required: true
+    - name: timeout
+      type: integer
+      description: "Timeout in milliseconds (max 600000, default 120000)"
+      required: false
+      default: 120000
+    - name: working_dir
+      type: string
+      description: "Working directory for the command"
+      required: false
+  returns:
+    type: string
+    description: "Command output (stdout and stderr)"
+  security:
+    requireApproval: true
+    sandbox: true
+    maxExecutionTime: "10m"
+    denylist:
+      - "sudo"
+      - "rm -rf /"
+      - "chmod 777"
+      - "mkfs"

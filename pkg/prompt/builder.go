@@ -22,6 +22,8 @@ type BuildOptions struct {
 	IncludeAgents  bool
 	IncludeProject bool
 	IncludeMemory  bool
+	IncludeTools   bool
+	ToolNames      []string // Specific tools to include (empty = all)
 	PlanMode       bool
 	CustomContext  map[string]interface{}
 }
@@ -72,6 +74,12 @@ func (b *Builder) Build(ctx context.Context, agentName string, opts BuildOptions
 		if err == nil {
 			promptCtx.Memory = memory
 		}
+	}
+
+	// Gather tool context if requested
+	if opts.IncludeTools {
+		promptCtx.Tools = b.gatherer.GatherToolContextStructured(opts.ToolNames)
+		promptCtx.ToolPrompt = b.gatherer.GatherToolContext(opts.ToolNames)
 	}
 
 	// Add custom context
@@ -157,6 +165,8 @@ type PromptContext struct {
 	Agents      []AgentContext         // Available agents with status
 	Project     *ProjectContext        // Name, values, goals, conventions
 	Memory      []MemoryItem           // Relevant context/history
+	Tools       []ToolContext          // Available tools (structured)
+	ToolPrompt  string                 // Pre-generated tool prompt section
 	PlanMode    bool                   // Current autonomy mode
 	CurrentTask string                 // Current task being worked on
 	Custom      map[string]interface{} // Custom context values

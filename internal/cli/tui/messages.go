@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/syntor/syntor/pkg/coordination"
+	"github.com/syntor/syntor/pkg/tools"
 )
 
 // StreamChunkMsg represents a chunk of streamed response
@@ -115,3 +116,47 @@ func DoTick() tea.Cmd {
 }
 
 const spinnerInterval = 100 * time.Millisecond
+
+// Tool execution messages
+
+// ToolCallDetectedMsg signals that tool calls were found in the response
+type ToolCallDetectedMsg struct {
+	Calls       []tools.ToolCall
+	TextContent string
+}
+
+// ToolApprovalRequestMsg signals that tools need user approval
+type ToolApprovalRequestMsg struct {
+	Requests []*tools.ApprovalRequest
+}
+
+// ToolApprovedMsg signals that a tool call was approved
+type ToolApprovedMsg struct {
+	CallID string
+}
+
+// ToolDeniedMsg signals that a tool call was denied
+type ToolDeniedMsg struct {
+	CallID string
+}
+
+// ToolApproveAllMsg signals that all pending tools were approved
+type ToolApproveAllMsg struct{}
+
+// ToolDenyAllMsg signals that all pending tools were denied
+type ToolDenyAllMsg struct{}
+
+// ToolExecutionStartMsg signals that tool execution has started
+type ToolExecutionStartMsg struct {
+	Call tools.ToolCall
+}
+
+// ToolExecutionCompleteMsg signals that tool execution completed
+type ToolExecutionCompleteMsg struct {
+	Results []tools.ToolResult
+}
+
+// ToolIterationLimitMsg signals that the tool iteration limit was reached
+type ToolIterationLimitMsg struct {
+	Iterations int
+}

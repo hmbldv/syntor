@@ -1,0 +1,46 @@
+apiVersion: syntor.dev/v1
+kind: Tool
+metadata:
+  name: grep
+  description: "Search file contents with regular expressions"
+  category: search
+spec:
+  parameters:
+    - name: pattern
+      type: string
+      description: "Regular expression pattern to search for"
+      required: true
+    - name: path
+      type: string
+      description: "Directory to search in (defaults to working directory)"
+      required: false
+    - name: glob
+      type: string
+      description: "File pattern filter (e.g., '*.go', '*.ts')"
+      required: false
+    - name: case_insensitive
+      type: boolean
+      description: "Perform case-insensitive search"
+      required: false
+      default: false
+    - name: context_before
+      type: integer
+      description: "Number of lines to show before each match"
+      required: false
+      default: 0
+    - name: context_after
+      type: integer
+      description: "Number of lines to show after each match"
+      required: false
+      default: 0
+    - name: max_results
+      type: integer
+      description: "Maximum number of matches to return (default 100, max 1000)"
+      required: false
+      default: 100
+  returns:
+    type: string
+    description: "Matching lines with file paths and line numbers"
+  security:
+    requireApproval: false
+    sandbox: true

@@ -48,8 +48,8 @@ Transform SYNTOR from static agent definitions to a dynamic, runtime-configurabl
 
 - [x] `pkg/coordination/protocol.go` - HandoffIntent, ExecutionPlan types
 - [x] `pkg/coordination/parser.go` - Extract JSON intents from LLM output
-- [ ] `pkg/coordination/executor.go` - Execute handoffs (integration pending)
-- [ ] Kafka integration for async handoffs
+- [x] `pkg/coordination/executor.go` - Execute handoffs with timeline tracking
+- [x] `pkg/coordination/async.go` - Kafka integration for async handoffs
 
 ### Phase 4: TUI Enhancements ✓
 **Goal**: Mode toggle, plan approval, agent activity visualization.
@@ -69,13 +69,53 @@ Transform SYNTOR from static agent definitions to a dynamic, runtime-configurabl
 - [x] `pkg/context/store.go` - ContextStore interface (Store, Item, SessionContext, AgentInteraction)
 - [x] `pkg/context/redis.go` - Redis implementation (RedisStore with session/task storage)
 - [x] `pkg/context/propagation.go` - TaskContext for handoffs (Fork, AddResult, BuildPromptContext)
-- [ ] Integrate memory into prompt building (integration pending)
+- [x] Integrate memory into prompt building (ContextStoreAdapter, InMemoryStore)
 
-### Phase 6: Polish & Testing
-- [ ] Integration tests for full workflow
-- [ ] Hot-reload testing
-- [ ] Documentation
-- [ ] Performance optimization
+### Phase 6: Tool System ✓
+**Goal**: Enable SNTR to interact with the local filesystem and execute commands like Claude Code.
+
+- [x] `pkg/tools/types.go` - ToolCall, ToolResult, Tool interface, error codes
+- [x] `pkg/tools/registry.go` - Tool registration and prompt generation
+- [x] `pkg/tools/parser.go` - Parse tool calls from JSON blocks in responses
+- [x] `pkg/tools/formatter.go` - Format results as XML for LLM consumption
+- [x] `pkg/tools/executor.go` - Execute tools with batching and concurrency
+- [x] `pkg/tools/security/manager.go` - Security policy enforcement
+- [x] `pkg/tools/security/validator.go` - Path and command validation
+- [x] Tool implementations in `pkg/tools/implementations/`:
+  - [x] `read_file.go` - Read file with line numbers
+  - [x] `write_file.go` - Write/create files
+  - [x] `edit_file.go` - Find and replace
+  - [x] `bash.go` - Execute shell commands
+  - [x] `glob.go` - Find files by pattern
+  - [x] `grep.go` - Search file contents with regex
+  - [x] `list_directory.go` - List directory contents
+- [x] TUI integration with tool execution loop
+- [x] Tool approval workflow in Plan mode
+- [x] Max 25 tool iterations to prevent infinite loops
+- [x] Conversation history for multi-turn tool use
+
+### Phase 7: Agent Rename & Awareness ✓
+**Goal**: Rename coordination agent to SNTR and add agent awareness.
+
+- [x] Rename `AgentCoordination` → `AgentSNTR` in registry
+- [x] Update TUI display names and commands (`/sntr`)
+- [x] Add tool descriptions to SNTR's system prompt
+- [x] Add agent list to SNTR's system prompt
+- [x] Backwards compatibility alias for `coordination`
+
+### Phase 8: Polish & Testing
+- [x] Tool system unit tests (`pkg/tools/tools_test.go`)
+- [x] Coordination package tests (`pkg/coordination/coordination_test.go`)
+- [x] Prompt builder tests (`pkg/prompt/prompt_test.go`)
+- [x] Integration tests (`test/integration/tool_workflow_test.go`)
+- [x] Hot-reload testing (`pkg/manifest/hotreload_test.go`)
+- [x] Documentation (README.md updated with Tool System, Agent Manifests)
+- [x] Performance optimization
+  - Fixed thread-safety issue in parser's callIDCounter (now atomic)
+  - Verified executor uses semaphore-based concurrency limiting
+  - Verified parallel/sequential categorization for tool execution
+  - Verified compiled regex in parser (not per-call)
+  - Verified strings.Builder usage in formatter
 
 ---
 
@@ -95,13 +135,29 @@ Transform SYNTOR from static agent definitions to a dynamic, runtime-configurabl
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         TUI (model.go)                          │
-│  [AUTO/PLAN] Toggle | Plan Approval | Agent Activity Panel      │
+│  [AUTO/PLAN] Toggle | Plan Approval | Tool Approval | Activity  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    User Input │ LLM Response
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Tool Execution Loop                          │
+│  Response Parser → Security Check → Approval → Execute → Loop   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+          Tool Results ←──────┴──────→ Continue Inference
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                 Tool System (pkg/tools/)                         │
+│  Registry | Parser | Executor | Formatter | Security Manager    │
+├─────────────────────────────────────────────────────────────────┤
+│  Tools: read_file | write_file | edit_file | bash | glob | grep │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Prompt Builder (pkg/prompt/)                  │
-│  Agent Context | Project Context | Memory Store                 │
+│  Agent Context | Project Context | Tool Descriptions | Memory   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼

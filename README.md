@@ -1,6 +1,14 @@
-# SYNTOR - Synthetic Orchestrator
+```
+░██████╗██╗░░░██╗███╗░░██╗████████╗░█████╗░██████╗░
+██╔════╝╚██╗░██╔╝████╗░██║╚══██╔══╝██╔══██╗██╔══██╗
+╚█████╗░░╚████╔╝░██╔██╗██║░░░██║░░░██║░░██║██████╔╝
+░╚═══██╗░░╚██╔╝░░██║╚████║░░░██║░░░██║░░██║██╔══██╗
+██████╔╝░░░██║░░░██║░╚███║░░░██║░░░╚█████╔╝██║░░██║
+╚═════╝░░░░╚═╝░░░╚═╝░░╚══╝░░░╚═╝░░░░╚════╝░╚═╝░░╚═╝
+                 Synthetic Orchestrator
+```
 
-A high-performance multi-agent AI system with a Claude Code-like CLI experience. Built with Go, Docker, and Apache Kafka for scalable, event-driven AI operations.
+A high-performance multi-agent AI system with a modern terminal UI. Built with Go, Docker, and Apache Kafka for scalable, event-driven AI operations.
 
 ## Quick Start
 
@@ -19,8 +27,11 @@ syntor
 
 ## Features
 
-- **Interactive CLI** - Claude Code-like interface with slash commands and streaming responses
-- **Multi-Agent System** - Specialized agents for coordination, documentation, git, and code tasks
+- **Modern Terminal UI** - Rich TUI with syntax-highlighted code blocks, markdown rendering, and visual styling
+- **Multi-Agent Coordination** - Specialized agents with YAML-based manifests and dynamic prompt building
+- **Tool Execution** - SNTR agent can read/write files, execute commands, search code (like Claude Code)
+- **Auto/Plan Modes** - Toggle between autonomous execution and plan-approval workflows (Ctrl+A)
+- **Code Block Support** - Syntax highlighting with `/copy` command for easy clipboard access
 - **Flexible AI Models** - Use Ollama locally or API providers (Anthropic Claude, DeepSeek)
 - **Per-Agent Models** - Assign different models to different agents based on task requirements
 - **Custom Commands** - Create your own slash commands with markdown templates
@@ -44,7 +55,7 @@ syntor
 │  ┌────────────────────────────────────┼────────────────────────┐    │
 │  │              Service Agents        │      Worker Agents     │    │
 │  │  ┌─────────────┐ ┌─────────────┐   │  ┌─────────────┐       │    │
-│  │  │Coordination │ │Documentation│   │  │   Worker    │ x N   │    │
+│  │  │   SNTR      │ │Documentation│   │  │   Worker    │ x N   │    │
 │  │  │   Agent     │ │   Agent     │   │  │   Agents    │       │    │
 │  │  └──────┬──────┘ └──────┬──────┘   │  └──────┬──────┘       │    │
 │  │         │               │          │         │              │    │
@@ -64,30 +75,53 @@ syntor
 ### Interactive Mode
 
 ```bash
-syntor
+syntor              # Launch TUI mode (default)
+syntor --simple     # Launch simple REPL mode
 ```
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║                    SYNTOR Interactive Mode                    ║
-╠══════════════════════════════════════════════════════════════╣
-║  Type /help for commands, /quit to exit                      ║
-║  Current agent: coordination                                  ║
-╚══════════════════════════════════════════════════════════════╝
+◈ SYNTOR ─────────────────────────────────────── Interactive Mode
 
-coordination> analyze the project structure
+░██████╗██╗░░░██╗███╗░░██╗████████╗░█████╗░██████╗░
+██╔════╝╚██╗░██╔╝████╗░██║╚══██╔══╝██╔══██╗██╔══██╗
+╚█████╗░░╚████╔╝░██╔██╗██║░░░██║░░░██║░░██║██████╔╝
+░╚═══██╗░░╚██╔╝░░██║╚████║░░░██║░░░██║░░██║██╔══██╗
+██████╔╝░░░██║░░░██║░╚███║░░░██║░░░╚█████╔╝██║░░██║
+╚═════╝░░░░╚═╝░░░╚═╝░░╚══╝░░░╚═╝░░░░╚════╝░╚═╝░░╚═╝
+                   Synthetic Orchestrator
+
+  Type a message to chat with the AI agent
+  Use /help for available commands
+  Press Ctrl+A to toggle Auto/Plan mode
+
+────────────────────────────────────────────────────────────────
+> your message here
+────────────────────────────────────────────────────────────────
+ Enter send  |  Ctrl+A mode  |  Tab complete  |  /help commands
 ```
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send message |
+| `Ctrl+A` | Toggle Auto/Plan mode |
+| `Ctrl+C` | Interrupt/Quit |
+| `Tab` | Autocomplete commands |
+| `↑/↓` | Scroll chat history |
+| `PgUp/PgDn` | Page through history |
 
 ### Slash Commands
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/coordination` | Switch to coordination agent |
+| `/sntr` | Switch to SNTR agent (primary orchestrator) |
 | `/docs` | Switch to documentation agent |
 | `/git` | Switch to git agent |
 | `/worker` | Switch to general worker agent |
 | `/code` | Switch to code worker agent |
+| `/copy [n]` | Copy code block n to clipboard |
 | `/models` | List available models |
 | `/status` | Show current agent and model |
 | `/config` | Show configuration |
@@ -101,7 +135,7 @@ coordination> analyze the project structure
 syntor chat "explain this code"
 
 # Use specific agents
-syntor coordination "analyze the codebase structure"
+syntor sntr "analyze the codebase structure"
 syntor docs "generate documentation for pkg/inference"
 syntor git "create a commit message for staged changes"
 syntor worker "summarize this file"
@@ -128,6 +162,57 @@ syntor config edit              # Open config in your editor
 syntor config path              # Show config file locations
 syntor config set provider ollama
 syntor config set default_model llama3.2:8b
+```
+
+## Agent Manifests
+
+Agents are defined via YAML manifests that can be hot-reloaded. Create custom agents in:
+- `~/.syntor/agents/` - Global agents
+- `.syntor/agents/` - Project-specific agents
+
+### Example Manifest
+
+```yaml
+apiVersion: syntor.dev/v1
+kind: Agent
+metadata:
+  name: security-reviewer
+  description: "Security code review specialist"
+spec:
+  type: specialist
+  capabilities:
+    - name: security_audit
+      description: "Reviews code for security vulnerabilities"
+  model:
+    default: deepseek-coder-v2:16b
+  prompt:
+    system: |
+      You are a security specialist. Review code for:
+      - SQL injection vulnerabilities
+      - XSS attacks
+      - Authentication issues
+      - Sensitive data exposure
+
+      {{if .ToolPrompt}}
+      ## Available Tools
+      {{.ToolPrompt}}
+      {{end}}
+  handoff:
+    allowedTargets:
+      - sntr
+      - code
+    protocol: structured
+```
+
+### Manifest Hot-Reload
+
+Changes to manifest files are automatically detected and applied without restarting:
+
+```bash
+# Edit an agent manifest
+vim ~/.syntor/agents/my-agent.yaml
+
+# Changes take effect immediately
 ```
 
 ### Custom Slash Commands
@@ -207,7 +292,7 @@ syntor models pull llama3.2:8b
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
-| Coordination | `mistral:7b` | Task orchestration and planning |
+| SNTR | `mistral:7b` | Primary orchestrator with tool execution |
 | Documentation | `deepseek-coder-v2:16b` | Code analysis and documentation |
 | Git | `llama3.2:8b` | Commit messages and git operations |
 | Worker | `llama3.2:3b` | General tasks |
@@ -230,7 +315,7 @@ inference:
   default_model: llama3.2:8b
   auto_pull: true
   models:
-    coordination: mistral:7b
+    sntr: mistral:7b
     documentation: deepseek-coder-v2:16b
     git: llama3.2:8b
     worker: llama3.2:3b
@@ -239,6 +324,64 @@ inference:
 cli:
   theme: auto
   stream_response: true
+```
+
+## Tool System
+
+SNTR, the primary orchestrator agent, has access to a set of tools for interacting with the filesystem and executing commands - similar to Claude Code.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents with line numbers |
+| `write_file` | Create or overwrite files |
+| `edit_file` | Find and replace content in files |
+| `bash` | Execute shell commands |
+| `glob` | Find files by pattern |
+| `grep` | Search file contents with regex |
+| `list_directory` | List directory contents |
+
+### Auto Mode vs Plan Mode
+
+SNTR operates in two modes (toggle with `Ctrl+A`):
+
+**Auto Mode (Default)**
+- Tools execute automatically without approval
+- Best for trusted environments and quick tasks
+- Maximum productivity for experienced users
+
+**Plan Mode**
+- Tool executions require explicit approval
+- SNTR presents a plan before execution
+- Use `Ctrl+Y` to approve, `Ctrl+N` to reject
+- Safer for learning or when extra caution is needed
+
+### Security
+
+The tool system includes security measures:
+- **Path validation** - Prevents traversal attacks and access to sensitive files
+- **Command allowlist** - Only safe commands permitted in bash tool
+- **Working directory scoping** - File operations constrained to project directory
+- **Max iteration limit** - 25 tool iterations per request to prevent infinite loops
+
+### Example Interaction
+
+```
+> Read the main.go file and add error handling
+
+[Auto Mode] SNTR is executing tools...
+
+Tool: read_file
+File: main.go
+Result: [file contents displayed]
+
+Tool: edit_file
+File: main.go
+Change: Added error handling to main function
+Result: ✓ File updated
+
+Done. Added try-catch style error handling with proper error messages.
 ```
 
 ## Full Infrastructure
@@ -277,7 +420,8 @@ syntor/
 │   ├── git/                 # Git operations agent
 │   └── worker/              # Worker agent
 ├── internal/
-│   ├── cli/                 # CLI implementation (REPL, commands)
+│   ├── cli/                 # CLI implementation
+│   │   └── tui/             # Terminal UI (bubbletea)
 │   ├── coordination/        # Coordination agent logic
 │   ├── documentation/       # Documentation agent logic
 │   ├── git/                 # Git agent logic
@@ -287,6 +431,13 @@ syntor/
 │   │   ├── ollama/          # Ollama provider
 │   │   ├── anthropic/       # Claude API (stub)
 │   │   └── deepseek/        # DeepSeek API (stub)
+│   ├── tools/               # Tool execution system
+│   │   ├── implementations/ # Tool implementations (read, write, bash, etc.)
+│   │   └── security/        # Security validation
+│   ├── manifest/            # YAML agent manifests with hot-reload
+│   ├── prompt/              # Dynamic prompt builder
+│   ├── coordination/        # Agent coordination protocol
+│   ├── context/             # Context propagation
 │   ├── config/              # Configuration management
 │   ├── setup/               # Initialization helpers
 │   ├── agent/               # Agent interfaces
@@ -298,6 +449,7 @@ syntor/
 │   ├── metrics/             # Prometheus metrics
 │   └── tracing/             # Distributed tracing
 ├── configs/
+│   ├── agents/              # Agent manifest YAML files
 │   ├── commands/            # Example custom commands
 │   ├── prometheus/          # Prometheus config
 │   └── grafana/             # Dashboards

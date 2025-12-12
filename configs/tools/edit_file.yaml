@@ -1,0 +1,31 @@
+apiVersion: syntor.dev/v1
+kind: Tool
+metadata:
+  name: edit_file
+  description: "Find and replace content in a file"
+  category: filesystem
+spec:
+  parameters:
+    - name: file_path
+      type: string
+      description: "The absolute path to the file to edit"
+      required: true
+    - name: old_string
+      type: string
+      description: "The exact string to find and replace"
+      required: true
+    - name: new_string
+      type: string
+      description: "The string to replace old_string with"
+      required: true
+    - name: replace_all
+      type: boolean
+      description: "Replace all occurrences instead of requiring uniqueness"
+      required: false
+      default: false
+  returns:
+    type: string
+    description: "Success message with number of replacements"
+  security:
+    requireApproval: true
+    sandbox: true

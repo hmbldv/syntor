@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 	"github.com/syntor/syntor/pkg/manifest"
 	"github.com/syntor/syntor/pkg/prompt"
 	"github.com/syntor/syntor/pkg/setup"
+	"github.com/syntor/syntor/pkg/tools"
+	"github.com/syntor/syntor/pkg/tools/implementations"
+	"github.com/syntor/syntor/pkg/tools/security"
 )
 
 // ChatMessage represents a message in the chat history
@@ -92,6 +96,18 @@ type Model struct {
 	// Markdown rendering
 	mdRenderer *MarkdownRenderer
 
+	// Tool system
+	toolRegistry      *tools.Registry
+	toolExecutor      *tools.Executor
+	toolParser        *tools.Parser
+	toolFormatter     *tools.Formatter
+	securityMgr       *security.Manager
+	pendingApprovals  []*tools.ApprovalRequest
+	toolIterations    int
+	maxToolIterations int
+	conversationHistory []inference.Message
+	workingDir        string
+
 	// Infrastructure
 	config        *config.SyntorConfig
 	registry      *inference.Registry
@@ -140,6 +156,28 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 	// Create markdown renderer with default width
 	mdRenderer, _ := NewMarkdownRenderer(80)
 
+	// Get working directory
+	workingDir, err := os.Getwd()
+	if err != nil {
+		workingDir = "."
+	}
+
+	// Initialize tool system
+	toolRegistry := tools.NewRegistry()
+	if err := implementations.RegisterAll(toolRegistry, workingDir); err != nil {
+		// Non-fatal, continue without tools
+		toolRegistry = nil
+	}
+
+	// Initialize security manager
+	securityMgr := security.NewManager(workingDir)
+
+	// Initialize tool executor with security
+	var toolExecutor *tools.Executor
+	if toolRegistry != nil {
+		toolExecutor = tools.NewExecutor(toolRegistry, securityMgr)
+	}
+
 	// Initial messages will be populated on first render when we know the width
 	initialMessages := []ChatMessage{}
 
@@ -148,7 +186,7 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		styles:          DefaultStyles(),
 		messages:        initialMessages,
 		streamBuffer:    &strings.Builder{},
-		currentAgent:    inference.AgentCoordination,
+		currentAgent:    inference.AgentSNTR,
 		autonomyMode:    PlanMode, // Default to Plan mode (safer)
 		planDetailLevel: SummaryDetail,
 		activeHandoffs:  make([]coordination.HandoffStatus, 0),
@@ -158,6 +196,15 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		promptBuilder:   promptBuilder,
 		cmdRegistry:     NewCommandRegistry(),
 		mdRenderer:      mdRenderer,
+		toolRegistry:    toolRegistry,
+		toolExecutor:    toolExecutor,
+		toolParser:      tools.NewParser(),
+		toolFormatter:   tools.NewFormatter(),
+		securityMgr:     securityMgr,
+		pendingApprovals: make([]*tools.ApprovalRequest, 0),
+		maxToolIterations: 25,
+		conversationHistory: make([]inference.Message, 0),
+		workingDir:      workingDir,
 		config:          cfg,
 		registry:        registry,
 		providerReady:   false,
@@ -390,6 +437,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Agent:   getAgentDisplayName(m.currentAgent),
 			})
 
+			// Add to conversation history
+			m.conversationHistory = append(m.conversationHistory, inference.Message{
+				Role:    "assistant",
+				Content: msg.Content,
+			})
+
+			// Parse response for tool calls
+			if m.toolParser != nil && m.toolParser.ContainsToolCalls(msg.Content) {
+				parseResult, err := m.toolParser.Parse(msg.Content)
+				if err == nil && parseResult.HasTools {
+					// Check for tool iteration limit
+					m.toolIterations++
+					if m.toolIterations > m.maxToolIterations {
+						return m, func() tea.Msg { return ToolIterationLimitMsg{Iterations: m.toolIterations} }
+					}
+					// Return tool detected message
+					return m, func() tea.Msg {
+						return ToolCallDetectedMsg{
+							Calls:       parseResult.ToolCalls,
+							TextContent: parseResult.TextContent,
+						}
+					}
+				}
+			}
+
 			// Parse response for handoff intents if coordination agent
 			if m.currentAgent == "coordination" && m.intentParser != nil {
 				if result, err := m.intentParser.ParseResponse(msg.Content); err == nil {
@@ -481,6 +553,102 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
+
+	// Tool execution messages
+	case ToolCallDetectedMsg:
+		if m.toolExecutor == nil {
+			m.addSystemMessage("Tool system not available")
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+
+		// Check for approvals needed
+		needsApproval := m.toolExecutor.CheckApprovals(msg.Calls, m.autonomyMode == PlanMode)
+		if len(needsApproval) > 0 && m.autonomyMode == PlanMode {
+			m.pendingApprovals = needsApproval
+			return m, func() tea.Msg { return ToolApprovalRequestMsg{Requests: needsApproval} }
+		}
+
+		// Execute tools directly
+		m.setActivity("tools", fmt.Sprintf("Executing %d tool(s)...", len(msg.Calls)))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, m.executeTools(msg.Calls)
+
+	case ToolApprovalRequestMsg:
+		var sb strings.Builder
+		sb.WriteString("🔧 Tool approval required:\n\n")
+		for i, req := range msg.Requests {
+			sb.WriteString(fmt.Sprintf("%d. %s (Risk: %s)\n", i+1, req.ToolCall.Name, req.Risk))
+			if len(req.ToolCall.Parameters) > 0 {
+				for k, v := range req.ToolCall.Parameters {
+					sb.WriteString(fmt.Sprintf("   %s: %v\n", k, v))
+				}
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("Ctrl+Y approve all | Ctrl+N deny all")
+		m.addSystemMessage(sb.String())
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+
+	case ToolApproveAllMsg:
+		if len(m.pendingApprovals) > 0 {
+			// Collect all pending tool calls
+			calls := make([]tools.ToolCall, 0, len(m.pendingApprovals))
+			for _, req := range m.pendingApprovals {
+				calls = append(calls, req.ToolCall)
+			}
+			m.pendingApprovals = nil
+			m.addSystemMessage("✓ Tools approved - executing...")
+			m.setActivity("tools", fmt.Sprintf("Executing %d tool(s)...", len(calls)))
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, m.executeTools(calls)
+		}
+
+	case ToolDenyAllMsg:
+		if len(m.pendingApprovals) > 0 {
+			m.pendingApprovals = nil
+			m.addSystemMessage("✗ Tools denied")
+			m.toolIterations = 0 // Reset iterations
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+		}
+
+	case ToolExecutionCompleteMsg:
+		m.clearActivity()
+
+		// Format results for display
+		var sb strings.Builder
+		sb.WriteString("🔧 Tool results:\n")
+		for _, result := range msg.Results {
+			status := "✓"
+			if !result.Success {
+				status = "✗"
+			}
+			sb.WriteString(fmt.Sprintf("\n%s %s", status, result.ToolName))
+			if result.Error != nil {
+				sb.WriteString(fmt.Sprintf(" - Error: %s", result.Error.Message))
+			}
+		}
+		m.addSystemMessage(sb.String())
+
+		// Format results for LLM and continue inference
+		formattedResults := m.toolFormatter.FormatResults(msg.Results)
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+
+		// Continue the conversation with tool results
+		return m, m.continueWithToolResults(formattedResults)
+
+	case ToolIterationLimitMsg:
+		m.clearActivity()
+		m.toolIterations = 0 // Reset for next conversation
+		m.addSystemMessage(fmt.Sprintf("⚠ Tool iteration limit reached (%d iterations). Stopping to prevent infinite loop.", msg.Iterations))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
 	}
 
 	// Update viewport
@@ -562,19 +730,25 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return ModeChangedMsg{Mode: m.autonomyMode} }
 
 	case tea.KeyCtrlY:
-		// Approve pending plan
+		// Approve pending plan or tools
 		if m.pendingPlan != nil {
 			plan := m.pendingPlan
 			m.pendingPlan = nil
 			return m, func() tea.Msg { return PlanApprovedMsg{Plan: plan} }
 		}
+		if len(m.pendingApprovals) > 0 {
+			return m, func() tea.Msg { return ToolApproveAllMsg{} }
+		}
 		return m, nil
 
 	case tea.KeyCtrlN:
-		// Reject pending plan
+		// Reject pending plan or tools
 		if m.pendingPlan != nil {
 			m.pendingPlan = nil
 			return m, func() tea.Msg { return PlanRejectedMsg{} }
+		}
+		if len(m.pendingApprovals) > 0 {
+			return m, func() tea.Msg { return ToolDenyAllMsg{} }
 		}
 		return m, nil
 
@@ -685,9 +859,9 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
-	case "coordination":
-		m.currentAgent = inference.AgentCoordination
-		m.addSystemMessage("Switched to coordination agent")
+	case "sntr", "coordination":
+		m.currentAgent = inference.AgentSNTR
+		m.addSystemMessage("Switched to sntr agent")
 		if args != "" {
 			return m.sendMessage(args)
 		}
@@ -804,6 +978,13 @@ func (m Model) sendMessage(message string) (tea.Model, tea.Cmd) {
 		Role:    "user",
 		Content: message,
 	})
+
+	// Add to conversation history and reset tool iterations for new conversation
+	m.conversationHistory = append(m.conversationHistory, inference.Message{
+		Role:    "user",
+		Content: message,
+	})
+	m.toolIterations = 0
 
 	// Set activity status
 	agentName := getAgentDisplayName(m.currentAgent)
@@ -1132,6 +1313,11 @@ func (m *Model) renderHelpBar() string {
 		help = append(help, m.styles.HelpKey.Render("Ctrl+N")+" "+m.styles.HelpDesc.Render("reject"))
 		help = append(help, m.styles.HelpKey.Render("Ctrl+D")+" "+m.styles.HelpDesc.Render("details"))
 		help = append(help, m.styles.HelpKey.Render("Ctrl+C")+" "+m.styles.HelpDesc.Render("quit"))
+	} else if len(m.pendingApprovals) > 0 {
+		// Tools pending approval
+		help = append(help, m.styles.HelpKey.Render("Ctrl+Y")+" "+m.styles.HelpDesc.Render("approve tools"))
+		help = append(help, m.styles.HelpKey.Render("Ctrl+N")+" "+m.styles.HelpDesc.Render("deny tools"))
+		help = append(help, m.styles.HelpKey.Render("Ctrl+C")+" "+m.styles.HelpDesc.Render("quit"))
 	} else {
 		help = append(help, m.styles.HelpKey.Render("Enter")+" "+m.styles.HelpDesc.Render("send"))
 		help = append(help, m.styles.HelpKey.Render("Ctrl+A")+" "+m.styles.HelpDesc.Render("mode"))
@@ -1288,7 +1474,7 @@ func (m *Model) renderHelp() string {
 	var sb strings.Builder
 	sb.WriteString("=== SYNTOR Commands ===\n\n")
 	sb.WriteString("Agent Commands:\n")
-	sb.WriteString("  /coordination  - Switch to coordination agent\n")
+	sb.WriteString("  /sntr          - Switch to sntr agent (primary orchestrator with tools)\n")
 	sb.WriteString("  /docs          - Switch to documentation agent\n")
 	sb.WriteString("  /git           - Switch to git agent\n")
 	sb.WriteString("  /worker        - Switch to general worker agent\n")
@@ -1299,6 +1485,7 @@ func (m *Model) renderHelp() string {
 	sb.WriteString("  /models        - List available models\n")
 	sb.WriteString("  /config        - Show configuration\n")
 	sb.WriteString("  /clear         - Clear the screen\n")
+	sb.WriteString("  /copy [n]      - Copy code block to clipboard\n")
 	sb.WriteString("  /quit          - Exit SYNTOR\n")
 	return sb.String()
 }
@@ -1306,8 +1493,8 @@ func (m *Model) renderHelp() string {
 // getAgentDisplayName returns the display name for an agent type
 func getAgentDisplayName(t inference.AgentType) string {
 	switch t {
-	case inference.AgentCoordination:
-		return "coordination"
+	case inference.AgentSNTR:
+		return "sntr"
 	case inference.AgentDocumentation:
 		return "docs"
 	case inference.AgentGit:
@@ -1347,8 +1534,8 @@ func (m *Model) buildDynamicPrompt(agentType inference.AgentType) string {
 // agentTypeToManifestName converts an AgentType to the manifest name
 func agentTypeToManifestName(t inference.AgentType) string {
 	switch t {
-	case inference.AgentCoordination:
-		return "coordination"
+	case inference.AgentSNTR:
+		return "sntr"
 	case inference.AgentDocumentation:
 		return "documentation"
 	case inference.AgentGit:
@@ -1365,8 +1552,37 @@ func agentTypeToManifestName(t inference.AgentType) string {
 // getSystemPrompt returns the system prompt for an agent type
 func getSystemPrompt(t inference.AgentType) string {
 	switch t {
-	case inference.AgentCoordination:
-		return "You are the coordination agent for SYNTOR. Help users plan and orchestrate tasks across different agents."
+	case inference.AgentSNTR:
+		return `You are SNTR, an AI coding assistant with LOCAL FILESYSTEM ACCESS.
+
+IMPORTANT: You MUST use tools to interact with the user's computer. You have REAL tools that execute on their system.
+
+## How to Use Tools
+Output a JSON code block to call tools:
+
+` + "```json" + `
+{
+  "tool_calls": [
+    {"id": "call_001", "name": "list_directory", "parameters": {"path": "."}}
+  ]
+}
+` + "```" + `
+
+## Your Tools (USE THEM!):
+1. **list_directory** - See what's in a folder. Example: {"name": "list_directory", "parameters": {"path": "."}}
+2. **read_file** - Read a file. Example: {"name": "read_file", "parameters": {"file_path": "/path/to/file"}}
+3. **write_file** - Create/overwrite a file. Example: {"name": "write_file", "parameters": {"file_path": "test.txt", "content": "Hello"}}
+4. **edit_file** - Find and replace in a file. Example: {"name": "edit_file", "parameters": {"file_path": "file.txt", "old_string": "old", "new_string": "new"}}
+5. **bash** - Run shell commands. Example: {"name": "bash", "parameters": {"command": "pwd"}}
+6. **glob** - Find files by pattern. Example: {"name": "glob", "parameters": {"pattern": "**/*.go"}}
+7. **grep** - Search in files. Example: {"name": "grep", "parameters": {"pattern": "TODO", "path": "."}}
+
+## Rules
+- ALWAYS use tools when asked about files, directories, or the codebase
+- When asked "what folder" or "where am I" → use list_directory or bash with "pwd"
+- When asked to read/show a file → use read_file
+- When asked to find something → use glob or grep
+- Output the JSON code block, then I will execute it and show you results`
 	case inference.AgentDocumentation:
 		return "You are the documentation agent for SYNTOR. Help users understand code, generate documentation, and explain concepts."
 	case inference.AgentGit:
@@ -1377,6 +1593,57 @@ func getSystemPrompt(t inference.AgentType) string {
 		return "You are the code worker agent for SYNTOR. Help users with code generation, refactoring, and programming tasks."
 	default:
 		return "You are SYNTOR, a helpful AI assistant."
+	}
+}
+
+// executeTools executes tool calls and returns the results
+func (m *Model) executeTools(calls []tools.ToolCall) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		opts := tools.ExecuteOptions{
+			WorkingDir: m.workingDir,
+			PlanMode:   m.autonomyMode == PlanMode,
+		}
+
+		results := m.toolExecutor.ExecuteBatch(ctx, calls, opts)
+		return ToolExecutionCompleteMsg{Results: results}
+	}
+}
+
+// continueWithToolResults continues inference with tool results
+func (m *Model) continueWithToolResults(toolResults string) tea.Cmd {
+	// Build system prompt before closure to capture current state
+	systemPrompt := m.buildDynamicPrompt(m.currentAgent)
+
+	// Add tool results to conversation history
+	m.conversationHistory = append(m.conversationHistory, inference.Message{
+		Role:    "user",
+		Content: toolResults,
+	})
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		provider, modelID, err := setup.GetProviderForAgent(m.registry, m.currentAgent)
+		if err != nil {
+			return ChatResponseMsg{Error: err}
+		}
+
+		// Build request with full conversation history
+		req := inference.ChatRequest{
+			Model:    modelID,
+			Messages: m.conversationHistory,
+			System:   systemPrompt,
+		}
+
+		resp, err := provider.Chat(ctx, req)
+		if err != nil {
+			return ChatResponseMsg{Error: err}
+		}
+		return ChatResponseMsg{Content: resp.Message.Content}
 	}
 }
 

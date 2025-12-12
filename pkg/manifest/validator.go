@@ -121,7 +121,7 @@ func validateSpec(spec *AgentSpec) error {
 	}
 
 	if len(errors) > 0 {
-		return fmt.Errorf(strings.Join(errors, "; "))
+		return fmt.Errorf("validation errors: %s", strings.Join(errors, "; "))
 	}
 
 	return nil

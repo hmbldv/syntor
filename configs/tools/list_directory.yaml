@@ -1,0 +1,33 @@
+apiVersion: syntor.dev/v1
+kind: Tool
+metadata:
+  name: list_directory
+  description: "List directory contents with file sizes"
+  category: filesystem
+spec:
+  parameters:
+    - name: path
+      type: string
+      description: "Directory path to list (defaults to working directory)"
+      required: false
+    - name: recursive
+      type: boolean
+      description: "List contents recursively"
+      required: false
+      default: false
+    - name: max_depth
+      type: integer
+      description: "Maximum depth for recursive listing (default 3)"
+      required: false
+      default: 3
+    - name: show_hidden
+      type: boolean
+      description: "Show hidden files and directories"
+      required: false
+      default: false
+  returns:
+    type: string
+    description: "Directory listing with file sizes"
+  security:
+    requireApproval: false
+    sandbox: true

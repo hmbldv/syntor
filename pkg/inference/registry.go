@@ -10,11 +10,12 @@ import (
 type AgentType string
 
 const (
-	AgentCoordination  AgentType = "coordination"
+	AgentSNTR          AgentType = "sntr"          // Primary orchestration agent (renamed from coordination)
+	AgentCoordination  AgentType = "sntr"          // Alias for backwards compatibility
 	AgentDocumentation AgentType = "documentation"
 	AgentGit           AgentType = "git"
 	AgentWorker        AgentType = "worker"
-	AgentWorkerCode    AgentType = "worker_code" // Worker for code-specific tasks
+	AgentWorkerCode    AgentType = "worker_code"   // Worker for code-specific tasks
 )
 
 // AvailableModels defines all models that SYNTOR supports
@@ -133,7 +134,7 @@ var AvailableModels = []Model{
 
 // DefaultModelAssignments defines the default model for each agent type
 var DefaultModelAssignments = map[AgentType]string{
-	AgentCoordination:  "mistral:7b",
+	AgentSNTR:          "mistral:7b",
 	AgentDocumentation: "deepseek-coder-v2:16b",
 	AgentGit:           "llama3.2:8b",
 	AgentWorker:        "llama3.2:3b",

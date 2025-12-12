@@ -1,0 +1,28 @@
+apiVersion: syntor.dev/v1
+kind: Tool
+metadata:
+  name: read_file
+  description: "Read file contents with line numbers"
+  category: filesystem
+spec:
+  parameters:
+    - name: file_path
+      type: string
+      description: "The absolute path to the file to read"
+      required: true
+    - name: offset
+      type: integer
+      description: "Line number to start reading from (0-indexed)"
+      required: false
+      default: 0
+    - name: limit
+      type: integer
+      description: "Maximum number of lines to read"
+      required: false
+      default: 2000
+  returns:
+    type: string
+    description: "File contents with line numbers"
+  security:
+    requireApproval: false
+    sandbox: true
