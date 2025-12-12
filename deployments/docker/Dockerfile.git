@@ -1,0 +1,66 @@
+# Multi-stage build for SYNTOR Git Operations Agent
+# Build stage
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
+    -o /build/git-agent \
+    ./cmd/git
+
+# Runtime stage
+FROM alpine:3.19
+
+# Git agent needs git runtime
+RUN apk add --no-cache ca-certificates tzdata git openssh-client
+
+RUN addgroup -g 1000 syntor && \
+    adduser -u 1000 -G syntor -s /bin/sh -D syntor
+
+WORKDIR /app
+
+# Create repositories storage directory
+RUN mkdir -p /app/repos && chown syntor:syntor /app/repos
+
+# SSH directory for git authentication
+RUN mkdir -p /home/syntor/.ssh && \
+    chown syntor:syntor /home/syntor/.ssh && \
+    chmod 700 /home/syntor/.ssh
+
+COPY --from=builder /build/git-agent /app/agent
+COPY --from=builder /build/configs/ /app/configs/
+
+RUN chown -R syntor:syntor /app
+
+USER syntor
+
+# Configure git
+RUN git config --global init.defaultBranch main && \
+    git config --global user.email "syntor@local" && \
+    git config --global user.name "SYNTOR Git Agent"
+
+EXPOSE 8080 9090
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:8080/health || exit 1
+
+ENV SYNTOR_AGENT_TYPE=git \
+    SYNTOR_AGENT_NAME=git-agent \
+    SYNTOR_ENVIRONMENT=local \
+    SYNTOR_LOG_LEVEL=info \
+    SYNTOR_LOG_FORMAT=json \
+    SYNTOR_KAFKA_BROKERS=kafka:9092 \
+    SYNTOR_REDIS_ADDRESS=redis:6379 \
+    SYNTOR_REPOS_PATH=/app/repos \
+    SYNTOR_METRICS_PORT=9090 \
+    SYNTOR_HEALTH_PORT=8080
+
+ENTRYPOINT ["/app/agent"]

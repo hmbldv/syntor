@@ -1,0 +1,102 @@
+groups:
+  - name: syntor-agent-alerts
+    interval: 30s
+    rules:
+      # Agent availability alerts
+      - alert: AgentDown
+        expr: up{job=~".*-agent"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SYNTOR Agent {{ $labels.instance }} is down"
+          description: "Agent {{ $labels.instance }} has been down for more than 1 minute."
+
+      - alert: AgentHighErrorRate
+        expr: rate(syntor_system_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on agent {{ $labels.agent_id }}"
+          description: "Agent {{ $labels.agent_id }} is experiencing high error rate ({{ $value }} errors/sec)"
+
+      # Task processing alerts
+      - alert: TaskProcessingSlowdown
+        expr: histogram_quantile(0.95, rate(syntor_agent_task_duration_seconds_bucket[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task processing slowdown on {{ $labels.agent_id }}"
+          description: "95th percentile task duration is {{ $value }}s on agent {{ $labels.agent_id }}"
+
+      - alert: HighTaskFailureRate
+        expr: rate(syntor_agent_tasks_processed_total{status="failed"}[10m]) / rate(syntor_agent_tasks_processed_total[10m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High task failure rate on {{ $labels.agent_id }}"
+          description: "Task failure rate is {{ $value | humanizePercentage }} on agent {{ $labels.agent_id }}"
+
+      # Load alerts
+      - alert: AgentHighLoad
+        expr: syntor_agent_current_load > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} has high load"
+          description: "Agent {{ $labels.agent_id }} load is at {{ $value | humanizePercentage }}"
+
+      - alert: AgentOverloaded
+        expr: syntor_agent_current_load >= 1.0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} is overloaded"
+          description: "Agent {{ $labels.agent_id }} is at maximum capacity"
+
+  - name: syntor-messaging-alerts
+    interval: 30s
+    rules:
+      - alert: MessageLatencyHigh
+        expr: histogram_quantile(0.95, rate(syntor_message_latency_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High message latency detected"
+          description: "95th percentile message latency is {{ $value }}s"
+
+      - alert: MessageThroughputDrop
+        expr: rate(syntor_messages_sent_total[5m]) < 1 and rate(syntor_messages_sent_total[1h] offset 1h) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Message throughput has dropped significantly"
+          description: "Message throughput has dropped from historical levels"
+
+  - name: syntor-registry-alerts
+    interval: 30s
+    rules:
+      - alert: NoRegisteredAgents
+        expr: syntor_registered_agents{status="running"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No active agents registered"
+          description: "There are no running agents registered in the system"
+
+      - alert: RegistryOperationFailures
+        expr: rate(syntor_registry_operations_total{status="error"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Registry operation failures detected"
+          description: "Registry is experiencing {{ $value }} errors/sec"

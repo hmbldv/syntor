@@ -1,0 +1,61 @@
+version: '3.8'
+
+# Development override file - use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  # Override agents with development mode (hot-reload via volume mounts)
+  # In development, we run agents locally with 'air' for hot-reload
+
+  coordination-agent:
+    profiles:
+      - agents
+    build:
+      target: builder
+    command: ["go", "run", "./cmd/coordination"]
+    volumes:
+      - .:/build
+      - go-cache:/go/pkg/mod
+    environment:
+      SYNTOR_LOG_LEVEL: debug
+
+  documentation-agent:
+    profiles:
+      - agents
+    build:
+      target: builder
+    command: ["go", "run", "./cmd/documentation"]
+    volumes:
+      - .:/build
+      - go-cache:/go/pkg/mod
+    environment:
+      SYNTOR_LOG_LEVEL: debug
+
+  git-agent:
+    profiles:
+      - agents
+    build:
+      target: builder
+    command: ["go", "run", "./cmd/git"]
+    volumes:
+      - .:/build
+      - go-cache:/go/pkg/mod
+    environment:
+      SYNTOR_LOG_LEVEL: debug
+
+  worker-agent:
+    profiles:
+      - agents
+    deploy:
+      replicas: 1
+    build:
+      target: builder
+    command: ["go", "run", "./cmd/worker"]
+    volumes:
+      - .:/build
+      - go-cache:/go/pkg/mod
+    environment:
+      SYNTOR_LOG_LEVEL: debug
+
+volumes:
+  go-cache:
+    name: syntor-go-cache

@@ -1,0 +1,372 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # Infrastructure Services
+  # ============================================================
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: syntor-zookeeper
+    hostname: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: syntor-kafka
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: syntor-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: syntor-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: syntor-redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: syntor-postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: syntor
+      POSTGRES_USER: syntor
+      POSTGRES_PASSWORD: syntor_dev_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syntor -d syntor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Monitoring Stack
+  # ============================================================
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: syntor-prometheus
+    hostname: prometheus
+    ports:
+      - "9091:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: syntor-grafana
+    hostname: grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: syntor_admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    container_name: syntor-jaeger
+    hostname: jaeger
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+      COLLECTOR_OTLP_ENABLED: "true"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Service Agents
+  # ============================================================
+
+  coordination-agent:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.coordination
+    container_name: syntor-coordination-agent
+    hostname: coordination-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+      - "9101:9090"
+    environment:
+      SYNTOR_AGENT_ID: coordination-agent-1
+      SYNTOR_AGENT_NAME: coordination-agent
+      SYNTOR_AGENT_TYPE: service
+      SYNTOR_ENVIRONMENT: local
+      SYNTOR_LOG_LEVEL: debug
+      SYNTOR_KAFKA_BROKERS: kafka:29092
+      SYNTOR_REDIS_ADDRESS: redis:6379
+      SYNTOR_POSTGRES_HOST: postgres
+      SYNTOR_POSTGRES_PORT: 5432
+      SYNTOR_POSTGRES_USER: syntor
+      SYNTOR_POSTGRES_PASSWORD: syntor_dev_password
+      SYNTOR_POSTGRES_DATABASE: syntor
+      SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+    volumes:
+      - ./configs:/app/configs:ro
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  documentation-agent:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.documentation
+    container_name: syntor-documentation-agent
+    hostname: documentation-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+      - "9102:9090"
+    environment:
+      SYNTOR_AGENT_ID: documentation-agent-1
+      SYNTOR_AGENT_NAME: documentation-agent
+      SYNTOR_AGENT_TYPE: service
+      SYNTOR_ENVIRONMENT: local
+      SYNTOR_LOG_LEVEL: debug
+      SYNTOR_KAFKA_BROKERS: kafka:29092
+      SYNTOR_REDIS_ADDRESS: redis:6379
+      SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+    volumes:
+      - ./configs:/app/configs:ro
+      - documentation-data:/app/docs
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  git-agent:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.git
+    container_name: syntor-git-agent
+    hostname: git-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8083:8080"
+      - "9103:9090"
+    environment:
+      SYNTOR_AGENT_ID: git-agent-1
+      SYNTOR_AGENT_NAME: git-agent
+      SYNTOR_AGENT_TYPE: service
+      SYNTOR_ENVIRONMENT: local
+      SYNTOR_LOG_LEVEL: debug
+      SYNTOR_KAFKA_BROKERS: kafka:29092
+      SYNTOR_REDIS_ADDRESS: redis:6379
+      SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+    volumes:
+      - ./configs:/app/configs:ro
+      - git-repos:/app/repos
+    networks:
+      - syntor-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Worker Agents (scalable)
+  # ============================================================
+
+  worker-agent:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.worker
+    hostname: worker-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SYNTOR_AGENT_TYPE: worker
+      SYNTOR_ENVIRONMENT: local
+      SYNTOR_LOG_LEVEL: debug
+      SYNTOR_KAFKA_BROKERS: kafka:29092
+      SYNTOR_REDIS_ADDRESS: redis:6379
+      SYNTOR_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+    volumes:
+      - ./configs:/app/configs:ro
+    networks:
+      - syntor-network
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    restart: unless-stopped
+
+# ============================================================
+# Networks
+# ============================================================
+
+networks:
+  syntor-network:
+    driver: bridge
+    name: syntor-network
+
+# ============================================================
+# Volumes
+# ============================================================
+
+volumes:
+  zookeeper-data:
+    name: syntor-zookeeper-data
+  zookeeper-logs:
+    name: syntor-zookeeper-logs
+  kafka-data:
+    name: syntor-kafka-data
+  redis-data:
+    name: syntor-redis-data
+  postgres-data:
+    name: syntor-postgres-data
+  prometheus-data:
+    name: syntor-prometheus-data
+  grafana-data:
+    name: syntor-grafana-data
+  documentation-data:
+    name: syntor-documentation-data
+  git-repos:
+    name: syntor-git-repos

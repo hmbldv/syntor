@@ -1,0 +1,76 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'syntor-local'
+    env: 'development'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Coordination Agent
+  - job_name: 'coordination-agent'
+    static_configs:
+      - targets: ['coordination-agent:9090']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'coordination-agent'
+
+  # Documentation Agent
+  - job_name: 'documentation-agent'
+    static_configs:
+      - targets: ['documentation-agent:9090']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'documentation-agent'
+
+  # Git Agent
+  - job_name: 'git-agent'
+    static_configs:
+      - targets: ['git-agent:9090']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'git-agent'
+
+  # Worker Agents (dynamic discovery via Docker labels)
+  - job_name: 'worker-agents'
+    dns_sd_configs:
+      - names:
+          - 'tasks.worker-agent'
+        type: 'A'
+        port: 9090
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Kafka metrics (using JMX exporter when configured)
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9999']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'kafka'
+
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'redis'
