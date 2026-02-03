@@ -29,6 +29,36 @@ type AgentSpec struct {
 	Prompt       PromptSpec       `yaml:"prompt" json:"prompt"`
 	Handoff      HandoffSpec      `yaml:"handoff,omitempty" json:"handoff,omitempty"`
 	Constraints  ConstraintSpec   `yaml:"constraints,omitempty" json:"constraints,omitempty"`
+
+	// Agent identity and personality (Phase 2)
+	Identity *IdentitySpec `yaml:"identity,omitempty" json:"identity,omitempty"`
+	Voice    *VoiceSpec    `yaml:"voice,omitempty" json:"voice,omitempty"`
+	Behavior *BehaviorSpec `yaml:"behavior,omitempty" json:"behavior,omitempty"`
+}
+
+// IdentitySpec defines the agent's core identity
+type IdentitySpec struct {
+	Statement      string   `yaml:"statement" json:"statement"`                                 // "You are PALADIN, the CISO..."
+	Role           string   `yaml:"role,omitempty" json:"role,omitempty"`                       // "Security Leadership"
+	Team           string   `yaml:"team,omitempty" json:"team,omitempty"`                       // "CRBRS"
+	ResponsibleFor []string `yaml:"responsibleFor,omitempty" json:"responsibleFor,omitempty"`   // Core responsibilities
+	Icon           string   `yaml:"icon,omitempty" json:"icon,omitempty"`                       // Nerd Font icon for display
+}
+
+// VoiceSpec defines how the agent communicates
+type VoiceSpec struct {
+	Tone     string   `yaml:"tone,omitempty" json:"tone,omitempty"`         // "Authoritative but approachable"
+	Style    string   `yaml:"style,omitempty" json:"style,omitempty"`       // "Strategic, clear"
+	Demeanor string   `yaml:"demeanor,omitempty" json:"demeanor,omitempty"` // "Seasoned leader"
+	Phrases  []string `yaml:"phrases,omitempty" json:"phrases,omitempty"`   // Characteristic phrases to use
+	Avoid    []string `yaml:"avoid,omitempty" json:"avoid,omitempty"`       // Things to never say
+}
+
+// BehaviorSpec defines agent behavioral guidelines
+type BehaviorSpec struct {
+	Guidelines  []string          `yaml:"guidelines,omitempty" json:"guidelines,omitempty"`   // General behavioral rules
+	Escalate    []string          `yaml:"escalate,omitempty" json:"escalate,omitempty"`       // When to escalate to user/other agent
+	Collaborate map[string]string `yaml:"collaborate,omitempty" json:"collaborate,omitempty"` // Per-agent interaction rules
 }
 
 // AgentType defines the category of agent
@@ -147,4 +177,54 @@ func (m *AgentManifest) CanHandoff(target string) bool {
 		}
 	}
 	return false
+}
+
+// GetIdentityStatement returns the identity statement or a default
+func (m *AgentManifest) GetIdentityStatement() string {
+	if m.Spec.Identity != nil && m.Spec.Identity.Statement != "" {
+		return m.Spec.Identity.Statement
+	}
+	return ""
+}
+
+// GetVoiceTone returns the voice tone or empty string
+func (m *AgentManifest) GetVoiceTone() string {
+	if m.Spec.Voice != nil {
+		return m.Spec.Voice.Tone
+	}
+	return ""
+}
+
+// GetVoiceStyle returns the voice style or empty string
+func (m *AgentManifest) GetVoiceStyle() string {
+	if m.Spec.Voice != nil {
+		return m.Spec.Voice.Style
+	}
+	return ""
+}
+
+// GetBehaviorGuidelines returns behavior guidelines or empty slice
+func (m *AgentManifest) GetBehaviorGuidelines() []string {
+	if m.Spec.Behavior != nil {
+		return m.Spec.Behavior.Guidelines
+	}
+	return nil
+}
+
+// GetCollaborationRule returns the collaboration rule for a specific agent
+func (m *AgentManifest) GetCollaborationRule(agentName string) string {
+	if m.Spec.Behavior != nil && m.Spec.Behavior.Collaborate != nil {
+		return m.Spec.Behavior.Collaborate[agentName]
+	}
+	return ""
+}
+
+// HasIdentity returns true if the agent has identity configured
+func (m *AgentManifest) HasIdentity() bool {
+	return m.Spec.Identity != nil && m.Spec.Identity.Statement != ""
+}
+
+// HasVoice returns true if the agent has voice configured
+func (m *AgentManifest) HasVoice() bool {
+	return m.Spec.Voice != nil && (m.Spec.Voice.Tone != "" || m.Spec.Voice.Style != "")
 }
