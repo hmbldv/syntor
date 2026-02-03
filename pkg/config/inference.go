@@ -315,6 +315,107 @@ func GetProjectContext() (string, error) {
 	return fmt.Sprintf("# Project Context (from %s)\n\n%s", path, content), nil
 }
 
+// GlobalContextPath returns the path to the global CENTAUR.md
+func GlobalContextPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".syntor", "CENTAUR.md")
+}
+
+// LoadGlobalContext loads the global CENTAUR.md context
+func LoadGlobalContext() (string, error) {
+	path := GlobalContextPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil // No CENTAUR.md, not an error
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// GetGlobalContext returns global context for the AI
+func GetGlobalContext() (string, error) {
+	content, err := LoadGlobalContext()
+	if err != nil {
+		return "", err
+	}
+	if content == "" {
+		return "", nil
+	}
+	return content, nil
+}
+
+// CreateDefaultGlobalContext creates a default CENTAUR.md file
+func CreateDefaultGlobalContext() error {
+	path := GlobalContextPath()
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	content := `# CENTAUR - Multi-Agent Orchestration System
+
+You are Centaur, an intelligent orchestrator that coordinates specialized agents.
+
+## Core Principles
+1. **Route, don't do everything** - Delegate to specialists when appropriate
+2. **Show your work** - Make handoffs and agent activity visible
+3. **Manage context** - Be aware of token limits and scale appropriately
+4. **Iterate and learn** - Build better configurations over time
+
+## Agent Routing Protocol
+
+**IMPORTANT: All agent routing MUST query FalkorDB.**
+
+Before responding to a user query:
+1. Assess: Is this a simple question or complex task?
+2. Route: Query FalkorDB agents graph for best-suited agent:
+   ` + "```" + `cypher
+   MATCH (sage:Agent {name: 'Sage'})-[r:ROUTES_TO]->(target:Agent)
+   WHERE r.task_type = $task_type
+   OPTIONAL MATCH (target)-[:REPORTS_TO*1..3]->(chain:Agent)
+   OPTIONAL MATCH (target)-[:MEMBER_OF]->(team:Team)
+   RETURN target.name AS agent, target.role, target.focus,
+          team.name AS team, collect(DISTINCT chain.name) AS chain,
+          target.definition_path, target.operations_dir
+   ` + "```" + `
+3. Load agent context from definition_path if found
+4. Delegate: Hand off to specialist with clear task description
+5. Synthesize: Combine results if multi-agent collaboration needed
+
+## Agent Discovery
+
+Use /agents command to list all available agents from FalkorDB.
+Agent definitions are stored in the graph - never hardcode agent lists.
+
+## Task Type Keywords
+
+Query FalkorDB for current task type mappings:
+` + "```" + `cypher
+MATCH (a:Agent)-[r:ROUTES_TO]->(b:Agent)
+RETURN DISTINCT r.task_type AS task_type, b.name AS handler
+ORDER BY r.task_type
+` + "```" + `
+
+## Context Awareness
+- Global context: Device-level settings and preferences
+- Project context: Current codebase specifics from SYNTOR.md
+- Session context: Conversation history and checkpoints
+- Skills: Always-active behavioral guidelines
+- Agents: Dynamic from FalkorDB graph
+`
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// GlobalContextExists checks if CENTAUR.md exists
+func GlobalContextExists() bool {
+	_, err := os.Stat(GlobalContextPath())
+	return err == nil
+}
+
 // SaveSyntorConfig saves configuration to the global config file
 func SaveSyntorConfig(config *SyntorConfig) error {
 	globalDir, _ := ConfigPaths()
