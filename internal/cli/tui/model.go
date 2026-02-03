@@ -85,9 +85,10 @@ type Model struct {
 	planDetailLevel DetailLevel
 
 	// Agent orchestration
-	activeHandoffs []coordination.HandoffStatus
-	agentTimeline  []coordination.TimelineEvent
-	intentParser   *coordination.Parser
+	activeHandoffs   []coordination.HandoffStatus
+	agentTimeline    []coordination.TimelineEvent
+	intentParser     *coordination.Parser
+	handoffExecutor  *coordination.Executor
 
 	// Manifest and prompt system
 	manifestStore *manifest.ManifestStore
@@ -224,6 +225,12 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 	// Initialize stats tracking
 	statsTracker, _ := stats.Load()
 
+	// Initialize handoff executor for real agent delegation
+	var handoffExecutor *coordination.Executor
+	if manifestStore != nil && promptBuilder != nil {
+		handoffExecutor = coordination.NewExecutor(registry, manifestStore, promptBuilder)
+	}
+
 	// Initial messages will be populated on first render when we know the width
 	initialMessages := []ChatMessage{}
 
@@ -238,6 +245,7 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		activeHandoffs:  make([]coordination.HandoffStatus, 0),
 		agentTimeline:   make([]coordination.TimelineEvent, 0),
 		intentParser:    coordination.NewParser(),
+		handoffExecutor: handoffExecutor,
 		manifestStore:   manifestStore,
 		promptBuilder:   promptBuilder,
 		cmdRegistry:     NewCommandRegistry(),
@@ -521,11 +529,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.pendingPlan = result.Plan
 						return m, func() tea.Msg { return PlanProposedMsg{Plan: result.Plan} }
 					} else if result.HasIntent && m.autonomyMode == AutoMode {
-						// In Auto mode, execute intent immediately
+						// In Auto mode, execute intent immediately using the real executor
 						intent := result.GetFirstIntent()
-						if intent != nil {
-							m.addSystemMessage(fmt.Sprintf("→ Delegating to %s: %s", intent.Target, intent.Task))
+						if intent != nil && m.handoffExecutor != nil {
+							// Set activity to show handoff is in progress
+							m.setActivityWithAgent("handoff", fmt.Sprintf("Handing off to %s", intent.Target), intent.Target)
+							// Execute the real handoff
+							return m, m.executeHandoff(intent)
 						}
+					}
+				}
+			}
+
+			// Also check for delegation intents from any agent (SNTR is also an orchestrator)
+			if m.intentParser != nil && m.handoffExecutor != nil {
+				if result, err := m.intentParser.ParseResponse(msg.Content); err == nil && result.HasIntent {
+					intent := result.GetFirstIntent()
+					if intent != nil && intent.Target != "" && intent.Target != string(m.currentAgent) {
+						m.setActivityWithAgent("handoff", fmt.Sprintf("Delegating to %s", intent.Target), intent.Target)
+						return m, m.executeHandoff(intent)
 					}
 				}
 			}
@@ -574,6 +596,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case HandoffCompletedMsg:
+		m.clearActivity()
 		// Update handoff status
 		for i := range m.activeHandoffs {
 			if m.activeHandoffs[i].Status == coordination.HandoffExecuting {
@@ -584,11 +607,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		statusStr := "✓"
-		if msg.Result != nil && msg.Result.Status != coordination.ResultSuccess {
-			statusStr = "✗"
+
+		if msg.Result != nil {
+			if msg.Result.Status == coordination.ResultSuccess {
+				// Add the delegated agent's response as a chat message
+				agentName := msg.Result.AgentName
+				if agentName == "" {
+					agentName = "Agent"
+				}
+				resultContent := ""
+				if resultStr, ok := msg.Result.Result.(string); ok {
+					resultContent = resultStr
+				} else if msg.Result.Result != nil {
+					resultContent = fmt.Sprintf("%v", msg.Result.Result)
+				}
+				if resultContent != "" {
+					m.messages = append(m.messages, ChatMessage{
+						Role:    "assistant",
+						Content: resultContent,
+						Agent:   agentName,
+					})
+					// Add to conversation history for context
+					m.conversationHistory = append(m.conversationHistory, inference.Message{
+						Role:    "assistant",
+						Content: fmt.Sprintf("[%s]: %s", agentName, resultContent),
+					})
+				}
+				m.addSystemMessage(fmt.Sprintf("✓ %s completed (%.2fs)", agentName, msg.Result.Duration.Seconds()))
+			} else {
+				// Handoff failed
+				errMsg := msg.Result.Error
+				if errMsg == "" {
+					errMsg = "Unknown error"
+				}
+				m.addSystemMessage(fmt.Sprintf("✗ Handoff failed: %s", errMsg))
+			}
+		} else {
+			m.addSystemMessage("✗ Handoff completed with no result")
 		}
-		m.addSystemMessage(fmt.Sprintf("%s Handoff completed", statusStr))
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 
@@ -2552,6 +2608,52 @@ func (m *Model) continueWithToolResults(toolResults string) tea.Cmd {
 			return ChatResponseMsg{Error: err}
 		}
 		return ChatResponseMsg{Content: resp.Message.Content}
+	}
+}
+
+// executeHandoff performs a real handoff to another agent
+func (m *Model) executeHandoff(intent *coordination.HandoffIntent) tea.Cmd {
+	return func() tea.Msg {
+		// Send handoff started message
+		startMsg := HandoffStartedMsg{
+			FromAgent: string(m.currentAgent),
+			ToAgent:   intent.Target,
+			Task:      intent.Task,
+		}
+
+		// Check if executor is available
+		if m.handoffExecutor == nil {
+			return HandoffCompletedMsg{
+				Result: &coordination.HandoffResult{
+					Status: coordination.ResultError,
+					Error:  "Handoff executor not initialized",
+				},
+			}
+		}
+
+		// Execute the handoff with a reasonable timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		// Execute the real inference call to the target agent
+		result, err := m.handoffExecutor.Execute(ctx, intent)
+		if err != nil {
+			return HandoffCompletedMsg{
+				Result: &coordination.HandoffResult{
+					Status: coordination.ResultError,
+					Error:  err.Error(),
+				},
+			}
+		}
+
+		// Return handoff started first, then completed
+		// Use tea.Batch to send both messages
+		return tea.Batch(
+			func() tea.Msg { return startMsg },
+			func() tea.Msg {
+				return HandoffCompletedMsg{Result: result}
+			},
+		)()
 	}
 }
 
