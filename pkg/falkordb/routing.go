@@ -130,7 +130,8 @@ func (c *Client) GetAgent(ctx context.Context, name string) (*Agent, error) {
 	cypher := `
 		MATCH (a:Agent {name: $name})
 		RETURN a.name, a.role, a.description, a.focus, a.type,
-		       a.definition_path, a.operations_dir, a.capabilities, a.task_types
+		       a.definition_path, a.operations_dir, a.capabilities, a.task_types,
+		       a.ollama_model, a.model_category
 	`
 
 	result, err := c.Query(ctx, cypher, map[string]any{"name": name})
@@ -153,7 +154,35 @@ func (c *Client) GetAgent(ctx context.Context, name string) (*Agent, error) {
 		OperationsDir:  getString(row, 6),
 		Capabilities:   getStringSlice(row, 7),
 		TaskTypes:      getStringSlice(row, 8),
+		OllamaModel:    getString(row, 9),
+		ModelCategory:  getString(row, 10),
 	}, nil
+}
+
+// GetAgentModel retrieves just the Ollama model for an agent.
+// This is optimized for model selection during handoffs.
+func (c *Client) GetAgentModel(ctx context.Context, agentName string) (string, error) {
+	if !c.config.Enabled || !c.IsConnected() {
+		return "", fmt.Errorf("FalkorDB not connected")
+	}
+
+	cypher := `MATCH (a:Agent {name: $name}) RETURN a.ollama_model`
+
+	result, err := c.Query(ctx, cypher, map[string]any{"name": agentName})
+	if err != nil {
+		return "", err
+	}
+
+	if len(result.Rows) == 0 {
+		return "", fmt.Errorf("agent not found: %s", agentName)
+	}
+
+	model := getString(result.Rows[0], 0)
+	if model == "" {
+		return "", fmt.Errorf("no model configured for agent: %s", agentName)
+	}
+
+	return model, nil
 }
 
 // ListAgents retrieves all agents, optionally filtered by type.

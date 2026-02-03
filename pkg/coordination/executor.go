@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/syntor/syntor/pkg/falkordb"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/manifest"
 	"github.com/syntor/syntor/pkg/prompt"
@@ -17,6 +18,7 @@ type Executor struct {
 	registry       *inference.Registry
 	manifestStore  *manifest.ManifestStore
 	promptBuilder  *prompt.Builder
+	falkorDB       *falkordb.Client // For dynamic agent model lookup
 	activeHandoffs map[string]*HandoffStatus
 	planExecutions map[string]*PlanExecution
 	timeline       []TimelineEvent
@@ -30,11 +32,12 @@ type ExecutorConfig struct {
 }
 
 // NewExecutor creates a new handoff executor
-func NewExecutor(registry *inference.Registry, store *manifest.ManifestStore, builder *prompt.Builder) *Executor {
+func NewExecutor(registry *inference.Registry, store *manifest.ManifestStore, builder *prompt.Builder, falkorClient *falkordb.Client) *Executor {
 	return &Executor{
 		registry:       registry,
 		manifestStore:  store,
 		promptBuilder:  builder,
+		falkorDB:       falkorClient,
 		activeHandoffs: make(map[string]*HandoffStatus),
 		planExecutions: make(map[string]*PlanExecution),
 		timeline:       make([]TimelineEvent, 0),
@@ -95,9 +98,18 @@ func (e *Executor) Execute(ctx context.Context, intent *HandoffIntent) (*Handoff
 		systemPrompt = agentManifest.Spec.Prompt.System
 	}
 
-	// Get model for target agent
-	agentType := e.mapAgentType(intent.Target)
-	modelID := e.registry.GetModelForAgent(agentType)
+	// Get model for target agent - try FalkorDB first, fall back to static registry
+	var modelID string
+	if e.falkorDB != nil && e.falkorDB.IsConnected() {
+		if model, err := e.falkorDB.GetAgentModel(execCtx, intent.Target); err == nil && model != "" {
+			modelID = model
+		}
+	}
+	// Fall back to static registry if FalkorDB lookup failed
+	if modelID == "" {
+		agentType := e.mapAgentType(intent.Target)
+		modelID = e.registry.GetModelForAgent(agentType)
+	}
 
 	// Get provider for model
 	providerName, found := e.registry.GetProviderForModel(modelID)

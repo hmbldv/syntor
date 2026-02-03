@@ -18,6 +18,8 @@ type Agent struct {
 	Capabilities   []string          `json:"capabilities,omitempty"`
 	TaskTypes      []string          `json:"task_types,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+	OllamaModel    string            `json:"ollama_model,omitempty"`    // Preferred Ollama model for this agent
+	ModelCategory  string            `json:"model_category,omitempty"` // Model category: coding, reasoning, communication, etc.
 }
 
 // AgentType categorizes agents by their function.
