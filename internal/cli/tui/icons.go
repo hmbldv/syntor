@@ -47,12 +47,72 @@ const (
 
 // Agent-specific icons
 const (
-	IconSNTR    = "\uF0AD1" // 󰫑 nf-md-crown (orchestrator)
-	IconWorker  = "\uF01A7" // 󰆧 nf-md-account_hard_hat
-	IconCode    = "\uF121"  //  nf-fa-code
-	IconDocs    = "\uF0219" // 󰈙 nf-md-file_document
-	IconGitAgent = "\uE702" //  nf-dev-git
-	IconPaladin = "\uF0513" // 󰔓 nf-md-shield_check (security)
+	// Orchestration
+	IconSNTR     = "\uF0AD1" // 󰫑 nf-md-crown (orchestrator)
+	IconWorker   = "\uF01A7" // 󰆧 nf-md-account_hard_hat
+	IconCode     = "\uF121"  //  nf-fa-code
+	IconDocs     = "\uF0219" // 󰈙 nf-md-file_document
+	IconGitAgent = "\uE702"  //  nf-dev-git
+
+	// Security (CRBRS team)
+	IconPaladin = "\uF0513" // 󰔓 nf-md-shield_check (CISO)
+	IconNEXUS   = "\uF0212" // 󰈒 nf-md-file_link (coordination)
+	IconHRDN    = "\uF0510" // 󰔐 nf-md-shield_lock (hardening)
+	IconDART    = "\uF0E6E" // 󰹮 nf-md-radar (detection)
+	IconGHST    = "\uF20F"  //  nf-fa-user_secret (offensive)
+	IconPROBE   = "\uF0341" // 󰍁 nf-md-magnify_scan (forensics)
+
+	// Research (Axiom team)
+	IconAxiom  = "\uF0341" // 󰍁 nf-md-magnify_scan (research)
+	IconThesis = "\uF0B00" // 󰬀 nf-md-head_lightbulb (research lead)
+	IconProof  = "\uF0667" // 󰙧 nf-md-check_decagram (verification)
+	IconCite   = "\uF018D" // 󰆍 nf-md-bookmark (citations)
+	IconQuery  = "\uF0349" // 󰍉 nf-md-magnify (queries)
+
+	// Communications (SIGNAL team)
+	IconSignal = "\uF0A80" // 󰪀 nf-md-broadcast (communications)
+	IconChorus = "\uF0AD2" // 󰫒 nf-md-crown_circle (comms lead)
+	IconPulse  = "\uF05F5" // 󰗵 nf-md-heart_pulse (PM)
+	IconBeacon = "\uF0335" // 󰌵 nf-md-lightbulb (outreach)
+	IconPolish = "\uF0DD8" // 󰷘 nf-md-format_paint (editor)
+	IconBrief  = "\uF0219" // 󰈙 nf-md-file_document (summaries)
+
+	// Personal Brand (BRND team)
+	IconBRND   = "\uF0651" // 󰙑 nf-md-star_circle (brand)
+	IconMarq   = "\uF0E32" // 󰸲 nf-md-diamond_stone (brand lead)
+	IconHerald = "\uF04DE" // 󰓞 nf-md-send (brand PM)
+	IconLinked = "\uF0D18" // 󱄘 nf-md-linkedin (linkedin)
+	IconResume = "\uF0219" // 󰈙 nf-md-file_document (resume)
+
+	// Development (FOUNDRY team)
+	IconFoundry = "\uF0864" // 󰡤 nf-md-anvil (development)
+	IconAnvil   = "\uF0864" // 󰡤 nf-md-anvil (dev lead)
+	IconSpark   = "\uF0E4F" // 󰹏 nf-md-lightning_bolt (PM)
+	IconCraft   = "\uF0493" // 󰒓 nf-md-wrench (implementation)
+	IconAssay   = "\uF0668" // 󰙨 nf-md-test_tube (testing)
+	IconFrame   = "\uF0E25" // 󰸥 nf-md-application (frontend)
+	IconGlyph   = "\uF0312" // 󰌒 nf-md-image (assets)
+
+	// Finance (BARAKA team)
+	IconBaraka = "\uF0306" // 󰌆 nf-md-currency_usd (finance)
+	IconAMIL   = "\uF0306" // 󰌆 nf-md-currency_usd (finance lead)
+	IconWAKIL  = "\uF04DE" // 󰓞 nf-md-send (finance PM)
+	IconDAYN   = "\uF0E8E" // 󰺎 nf-md-cash_multiple (debt)
+	IconHALAL  = "\uF05E0" // 󰗠 nf-md-check_circle (compliance)
+	IconKANZ   = "\uF0870" // 󰡰 nf-md-treasure_chest (savings)
+
+	// Infrastructure
+	IconHive   = "\uF01BC" // 󰆼 nf-md-database (database)
+	IconKuber  = "\uF10FE" // 󱃾 nf-md-kubernetes (kubernetes)
+	IconNetty  = "\uF0318" // 󰌘 nf-md-lan (network)
+	IconTriage = "\uF0E1F" // 󰸟 nf-md-stethoscope (diagnostics)
+
+	// Agent Architecture (AGNT team)
+	IconAGNT     = "\uF1246" // 󱉆 nf-md-robot_outline (agent design)
+	IconAPEX     = "\uF1246" // 󱉆 nf-md-robot_outline (agent lead)
+	IconDispatch = "\uF04DE" // 󰓞 nf-md-send (task dispatch)
+	IconMatrix   = "\uF0626" // 󰘦 nf-md-grid (agent grid)
+	IconForge    = "\uF0864" // 󰡤 nf-md-anvil (agent forge)
 )
 
 // ActivityIcons maps activity types to their icons
@@ -81,15 +141,117 @@ var ToolIcons = map[string]string{
 
 // AgentIcons maps agent names to their icons
 var AgentIcons = map[string]string{
+	// Orchestration
 	"sntr":          IconSNTR,
+	"SNTR":          IconSNTR,
 	"coordination":  IconSNTR,
 	"worker":        IconWorker,
 	"code":          IconCode,
+	"Coder":         IconCode,
 	"docs":          IconDocs,
 	"documentation": IconDocs,
 	"git":           IconGitAgent,
-	"paladin":       IconPaladin,
-	"security":      IconPaladin,
+
+	// Security (CRBRS)
+	"PALADIN": IconPaladin,
+	"paladin": IconPaladin,
+	"security": IconPaladin,
+	"NEXUS":   IconNEXUS,
+	"nexus":   IconNEXUS,
+	"HRDN":    IconHRDN,
+	"hrdn":    IconHRDN,
+	"DART":    IconDART,
+	"dart":    IconDART,
+	"GHST":    IconGHST,
+	"ghst":    IconGHST,
+	"PROBE":   IconPROBE,
+	"probe":   IconPROBE,
+
+	// Research (Axiom)
+	"Axiom":  IconAxiom,
+	"axiom":  IconAxiom,
+	"Thesis": IconThesis,
+	"thesis": IconThesis,
+	"Proof":  IconProof,
+	"proof":  IconProof,
+	"Cite":   IconCite,
+	"cite":   IconCite,
+	"Query":  IconQuery,
+	"query":  IconQuery,
+
+	// Communications (SIGNAL)
+	"SIGNAL": IconSignal,
+	"signal": IconSignal,
+	"Chorus": IconChorus,
+	"chorus": IconChorus,
+	"Pulse":  IconPulse,
+	"pulse":  IconPulse,
+	"Beacon": IconBeacon,
+	"beacon": IconBeacon,
+	"Polish": IconPolish,
+	"polish": IconPolish,
+	"Brief":  IconBrief,
+	"brief":  IconBrief,
+	"Editor": IconPolish,
+	"editor": IconPolish,
+
+	// Personal Brand (BRND)
+	"BRND":   IconBRND,
+	"brnd":   IconBRND,
+	"Marq":   IconMarq,
+	"marq":   IconMarq,
+	"Herald": IconHerald,
+	"herald": IconHerald,
+
+	// Development (FOUNDRY)
+	"FOUNDRY": IconFoundry,
+	"foundry": IconFoundry,
+	"ANVIL":   IconAnvil,
+	"anvil":   IconAnvil,
+	"Spark":   IconSpark,
+	"spark":   IconSpark,
+	"Craft":   IconCraft,
+	"craft":   IconCraft,
+	"Assay":   IconAssay,
+	"assay":   IconAssay,
+	"Frame":   IconFrame,
+	"frame":   IconFrame,
+	"Glyph":   IconGlyph,
+	"glyph":   IconGlyph,
+
+	// Finance (BARAKA)
+	"BARAKA": IconBaraka,
+	"baraka": IconBaraka,
+	"AMIL":   IconAMIL,
+	"amil":   IconAMIL,
+	"WAKIL":  IconWAKIL,
+	"wakil":  IconWAKIL,
+	"DAYN":   IconDAYN,
+	"dayn":   IconDAYN,
+	"HALAL":  IconHALAL,
+	"halal":  IconHALAL,
+	"KANZ":   IconKANZ,
+	"kanz":   IconKANZ,
+
+	// Infrastructure
+	"Hive":   IconHive,
+	"hive":   IconHive,
+	"Kuber":  IconKuber,
+	"kuber":  IconKuber,
+	"Netty":  IconNetty,
+	"netty":  IconNetty,
+	"TRIAGE": IconTriage,
+	"triage": IconTriage,
+
+	// Agent Architecture (AGNT)
+	"AGNT":     IconAGNT,
+	"agnt":     IconAGNT,
+	"APEX":     IconAPEX,
+	"apex":     IconAPEX,
+	"Dispatch": IconDispatch,
+	"dispatch": IconDispatch,
+	"Matrix":   IconMatrix,
+	"matrix":   IconMatrix,
 }
 
 // GetActivityIcon returns the icon for an activity type
