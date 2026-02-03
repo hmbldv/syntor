@@ -50,6 +50,9 @@ func (b *Builder) Build(ctx context.Context, agentName string, opts BuildOptions
 		PlanMode: opts.PlanMode,
 	}
 
+	// Build Self context from manifest
+	promptCtx.Self = b.buildSelfContext(agentManifest)
+
 	// Gather agent context if requested
 	if opts.IncludeAgents {
 		agents, err := b.gatherer.GatherAgentContext(ctx)
@@ -89,6 +92,43 @@ func (b *Builder) Build(ctx context.Context, agentName string, opts BuildOptions
 
 	// Execute template
 	return b.executeTemplate(agentManifest.Spec.Prompt.System, promptCtx)
+}
+
+// buildSelfContext creates SelfAgentContext from an agent manifest
+func (b *Builder) buildSelfContext(m *manifest.AgentManifest) *SelfAgentContext {
+	self := &SelfAgentContext{
+		Name:         m.Metadata.Name,
+		Description:  m.Metadata.Description,
+		Type:         string(m.Spec.Type),
+		Capabilities: m.GetCapabilityNames(),
+	}
+
+	// Populate identity if present
+	if m.Spec.Identity != nil {
+		self.IdentityStatement = m.Spec.Identity.Statement
+		self.Role = m.Spec.Identity.Role
+		self.Team = m.Spec.Identity.Team
+		self.ResponsibleFor = m.Spec.Identity.ResponsibleFor
+		self.Icon = m.Spec.Identity.Icon
+	}
+
+	// Populate voice if present
+	if m.Spec.Voice != nil {
+		self.Tone = m.Spec.Voice.Tone
+		self.Style = m.Spec.Voice.Style
+		self.Demeanor = m.Spec.Voice.Demeanor
+		self.Phrases = m.Spec.Voice.Phrases
+		self.Avoid = m.Spec.Voice.Avoid
+	}
+
+	// Populate behavior if present
+	if m.Spec.Behavior != nil {
+		self.Guidelines = m.Spec.Behavior.Guidelines
+		self.Escalate = m.Spec.Behavior.Escalate
+		self.Collaborate = m.Spec.Behavior.Collaborate
+	}
+
+	return self
 }
 
 // BuildWithContext builds a prompt with pre-gathered context
@@ -162,6 +202,7 @@ func defaultFuncMap() template.FuncMap {
 
 // PromptContext contains all context for prompt generation
 type PromptContext struct {
+	Self        *SelfAgentContext      // The agent's own identity and voice
 	Agents      []AgentContext         // Available agents with status
 	Project     *ProjectContext        // Name, values, goals, conventions
 	Memory      []MemoryItem           // Relevant context/history
@@ -170,6 +211,36 @@ type PromptContext struct {
 	PlanMode    bool                   // Current autonomy mode
 	CurrentTask string                 // Current task being worked on
 	Custom      map[string]interface{} // Custom context values
+}
+
+// SelfAgentContext contains the agent's own identity for self-reference in prompts
+type SelfAgentContext struct {
+	// Core identity
+	Name              string   // Agent name (e.g., "PALADIN")
+	Description       string   // Brief description
+	Role              string   // Role (e.g., "Security Leadership")
+	Team              string   // Team name (e.g., "CRBRS")
+	Type              string   // Agent type (coordination, specialist, worker)
+	IdentityStatement string   // Full identity statement
+
+	// Responsibilities
+	ResponsibleFor []string // Core responsibilities
+	Capabilities   []string // Capability names
+
+	// Voice characteristics
+	Tone     string   // Communication tone
+	Style    string   // Communication style
+	Demeanor string   // Overall demeanor
+	Phrases  []string // Characteristic phrases to use
+	Avoid    []string // Things to never say
+
+	// Behavioral rules
+	Guidelines  []string          // General behavioral rules
+	Escalate    []string          // When to escalate
+	Collaborate map[string]string // Per-agent interaction rules
+
+	// Display
+	Icon string // Nerd Font icon for this agent
 }
 
 // AgentContext represents an available agent for prompt context
