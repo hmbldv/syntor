@@ -56,7 +56,7 @@ func NewUnifiedLoader(cfg UnifiedLoaderConfig) (*UnifiedLoader, error) {
 
 	// Try to connect to FalkorDB for routing
 	if cfg.FalkorDBConfig != nil {
-		client, err := falkordb.NewClient(*cfg.FalkorDBConfig)
+		client, err := falkordb.New(*cfg.FalkorDBConfig)
 		if err != nil {
 			// Non-fatal, continue without FalkorDB
 			fmt.Printf("FalkorDB unavailable: %v\n", err)
@@ -114,12 +114,15 @@ func (l *UnifiedLoader) RouteAndLoad(ctx context.Context, taskType string) (*Loa
 		result, err := l.falkorDB.RouteTask(ctx, falkordb.RouteQuery{TaskType: taskType})
 		if err == nil {
 			agentID = result.Agent.Name
+			teamName := ""
+			if result.Team != nil {
+				teamName = result.Team.Name
+			}
 			routeInfo = &RouteInfo{
-				Agent:      result.Agent.Name,
-				Role:       result.Agent.Role,
-				Team:       result.Team.Name,
-				Chain:      result.Route.Chain,
-				Confidence: result.Route.Confidence,
+				Agent: result.Agent.Name,
+				Role:  result.Agent.Role,
+				Team:  teamName,
+				Chain: result.Route.Chain,
 			}
 		}
 	}
@@ -352,11 +355,10 @@ type LoadedAgent struct {
 
 // RouteInfo contains routing information from FalkorDB
 type RouteInfo struct {
-	Agent      string
-	Role       string
-	Team       string
-	Chain      []string
-	Confidence float64
+	Agent string
+	Role  string
+	Team  string
+	Chain []string
 }
 
 // GetTone returns the personality tone or default
