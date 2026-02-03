@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/syntor/syntor/pkg/checkpoint"
+	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/falkordb"
 	"github.com/syntor/syntor/pkg/herald"
 	"github.com/syntor/syntor/pkg/hooks"
@@ -138,6 +139,27 @@ func DefaultIntegrationConfig() IntegrationConfig {
 		CheckpointPolicy: checkpoint.DefaultPolicyConfig(),
 		Hooks:            hooks.DefaultConfig(),
 		SubAgent:         subagent.DefaultConfig(),
+	}
+}
+
+// IntegrationConfigFromYAML converts the YAML-based config to package-specific configs.
+// This bridges the gap between the user-facing YAML config and the internal package types.
+func IntegrationConfigFromYAML(cfg *config.IntegrationsConfig) IntegrationConfig {
+	if cfg == nil {
+		return DefaultIntegrationConfig()
+	}
+
+	// Use the conversion methods from the config package
+	storageConfig, policyConfig := cfg.Checkpoint.ToCheckpointConfigs()
+
+	return IntegrationConfig{
+		Herald:           cfg.Herald.ToHeraldConfig(),
+		FalkorDB:         cfg.FalkorDB.ToFalkorDBConfig(),
+		MCP:              cfg.MCP.ToMCPConfig(),
+		Checkpoint:       storageConfig,
+		CheckpointPolicy: policyConfig,
+		Hooks:            cfg.Hooks.ToHooksConfig(),
+		SubAgent:         cfg.SubAgent.ToSubAgentConfig(),
 	}
 }
 

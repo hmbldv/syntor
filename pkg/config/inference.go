@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -36,8 +38,9 @@ type AgentModels struct {
 
 // SyntorConfig holds the complete SYNTOR configuration (YAML format)
 type SyntorConfig struct {
-	Inference InferenceConfig `yaml:"inference" json:"inference"`
-	CLI       CLIConfig       `yaml:"cli" json:"cli"`
+	Inference    InferenceConfig    `yaml:"inference" json:"inference"`
+	CLI          CLIConfig          `yaml:"cli" json:"cli"`
+	Integrations IntegrationsConfig `yaml:"integrations" json:"integrations"`
 }
 
 // CLIConfig holds CLI-specific configuration
@@ -78,8 +81,9 @@ func DefaultCLIConfig() CLIConfig {
 // DefaultSyntorConfig returns default SYNTOR configuration
 func DefaultSyntorConfig() SyntorConfig {
 	return SyntorConfig{
-		Inference: DefaultInferenceConfig(),
-		CLI:       DefaultCLIConfig(),
+		Inference:    DefaultInferenceConfig(),
+		CLI:          DefaultCLIConfig(),
+		Integrations: DefaultIntegrationsConfig(),
 	}
 }
 
@@ -174,6 +178,141 @@ func applyEnvOverrides(config *SyntorConfig) {
 	if v := os.Getenv("SYNTOR_MODEL_WORKER_CODE"); v != "" {
 		config.Inference.Models.WorkerCode = v
 	}
+
+	// Integration overrides
+	if v := os.Getenv("SYNTOR_HERALD_URL"); v != "" {
+		config.Integrations.Herald.BaseURL = v
+	}
+	if v := os.Getenv("SYNTOR_FALKORDB_ADDR"); v != "" {
+		config.Integrations.FalkorDB.Address = v
+	}
+}
+
+// ProjectMarkdownPath returns the path to SYNTOR.md in the current project
+func ProjectMarkdownPath() string {
+	return "SYNTOR.md"
+}
+
+// LoadProjectMarkdown loads SYNTOR.md from the current directory or parent directories
+func LoadProjectMarkdown() (string, string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", err
+	}
+
+	// Search current directory and up to 5 parent directories
+	dir := cwd
+	for i := 0; i < 6; i++ {
+		mdPath := filepath.Join(dir, "SYNTOR.md")
+		if data, err := os.ReadFile(mdPath); err == nil {
+			return string(data), mdPath, nil
+		}
+
+		// Move to parent directory
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // Reached root
+		}
+		dir = parent
+	}
+
+	return "", "", os.ErrNotExist
+}
+
+// ProjectMarkdownExists checks if SYNTOR.md exists in the project
+func ProjectMarkdownExists() bool {
+	_, _, err := LoadProjectMarkdown()
+	return err == nil
+}
+
+// CreateProjectMarkdown creates a default SYNTOR.md in the current directory
+func CreateProjectMarkdown(projectName, projectDesc string) error {
+	content := fmt.Sprintf(`# SYNTOR.md
+
+This file provides guidance to SYNTOR when working with code in this repository.
+
+## Project: %s
+
+%s
+
+---
+
+## Codebase Overview
+
+<!-- Describe your project's architecture, key directories, and important files -->
+
+## Development Guidelines
+
+<!-- Add coding conventions, style guides, and best practices -->
+
+## Build & Test Commands
+
+<!-- List common commands for building, testing, and running the project -->
+
+## Important Notes
+
+<!-- Any critical information SYNTOR should know about this codebase -->
+
+## Skills
+
+Active skills from ~/.syntor/skills/ are automatically loaded.
+See /skills command for available skills.
+`, projectName, projectDesc)
+
+	return os.WriteFile(ProjectMarkdownPath(), []byte(content), 0644)
+}
+
+// LoadSettings loads settings.json from the global config directory
+func LoadSettings() (map[string]interface{}, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	settingsPath := filepath.Join(home, ".syntor", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]interface{}), nil
+		}
+		return nil, err
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, err
+	}
+
+	return settings, nil
+}
+
+// SaveSettings saves settings to settings.json in the global config directory
+func SaveSettings(settings map[string]interface{}) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	settingsPath := filepath.Join(home, ".syntor", "settings.json")
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(settingsPath, data, 0644)
+}
+
+// GetProjectContext returns project-specific context for the AI
+func GetProjectContext() (string, error) {
+	content, path, err := LoadProjectMarkdown()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil // No SYNTOR.md, not an error
+		}
+		return "", err
+	}
+
+	return fmt.Sprintf("# Project Context (from %s)\n\n%s", path, content), nil
 }
 
 // SaveSyntorConfig saves configuration to the global config file
