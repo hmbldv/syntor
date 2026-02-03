@@ -82,6 +82,15 @@ type Session struct {
 	ParentID    string            `json:"parent_id,omitempty"` // For forked sessions
 	TokensUsed  int64             `json:"tokens_used"`
 	MessageCount int              `json:"message_count"`
+
+	// Message history for session persistence (Phase 5)
+	Messages      []Message `json:"messages,omitempty"`
+	CheckpointID  string    `json:"checkpoint_id,omitempty"`
+
+	// Context tracking for session resume
+	GlobalContext  string `json:"global_context,omitempty"`
+	ProjectContext string `json:"project_context,omitempty"`
+	ContextTokens  int    `json:"context_tokens"`
 }
 
 // SessionType indicates what kind of session this is.
