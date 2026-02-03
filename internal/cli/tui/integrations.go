@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/syntor/syntor/pkg/agentdb"
 	"github.com/syntor/syntor/pkg/checkpoint"
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/falkordb"
@@ -24,6 +25,9 @@ type IntegratedServices struct {
 	// FalkorDB client for agent routing
 	FalkorDB *falkordb.Client
 
+	// AgentLoader for unified agent definition loading (PostgreSQL + FalkorDB + manifests)
+	AgentLoader *agentdb.UnifiedLoader
+
 	// MCP client for external tools
 	MCP *mcp.Client
 	MCPDiscovery *mcp.Discovery
@@ -40,6 +44,7 @@ type IntegratedServices struct {
 	// Status tracking
 	HeraldAvailable    bool
 	FalkorDBAvailable  bool
+	AgentDBAvailable   bool
 	MCPToolCount       int
 	LastCheckpointTime time.Time
 	ActiveSubAgents    int
@@ -66,6 +71,23 @@ func NewIntegratedServices(ctx context.Context, config *IntegrationConfig) (*Int
 			if err := falkorClient.Connect(ctx); err == nil {
 				services.FalkorDBAvailable = true
 			}
+		}
+	}
+
+	// Initialize AgentLoader (unified loader for PostgreSQL + FalkorDB + manifests)
+	if config.AgentDB.Host != "" {
+		loaderCfg := agentdb.UnifiedLoaderConfig{
+			AgentDBConfig:  &config.AgentDB,
+			PreferDatabase: true,
+		}
+		// Add FalkorDB config if available
+		if config.FalkorDB.Enabled {
+			loaderCfg.FalkorDBConfig = &config.FalkorDB
+		}
+		loader, err := agentdb.NewUnifiedLoader(loaderCfg)
+		if err == nil {
+			services.AgentLoader = loader
+			services.AgentDBAvailable = loader.IsAgentDBAvailable()
 		}
 	}
 
@@ -106,6 +128,9 @@ func (s *IntegratedServices) Close() error {
 	if s.FalkorDB != nil {
 		s.FalkorDB.Close()
 	}
+	if s.AgentLoader != nil {
+		s.AgentLoader.Close()
+	}
 	if s.MCP != nil {
 		s.MCP.Close()
 	}
@@ -122,6 +147,7 @@ func (s *IntegratedServices) Close() error {
 type IntegrationConfig struct {
 	Herald           herald.Config
 	FalkorDB         falkordb.Config
+	AgentDB          agentdb.Config
 	MCP              mcp.Config
 	Checkpoint       checkpoint.StorageConfig
 	CheckpointPolicy checkpoint.PolicyConfig
@@ -134,6 +160,7 @@ func DefaultIntegrationConfig() IntegrationConfig {
 	return IntegrationConfig{
 		Herald:           herald.DefaultConfig(),
 		FalkorDB:         falkordb.DefaultConfig(),
+		AgentDB:          agentdb.DefaultConfig(),
 		MCP:              mcp.DefaultConfig(),
 		Checkpoint:       checkpoint.DefaultStorageConfig(),
 		CheckpointPolicy: checkpoint.DefaultPolicyConfig(),
@@ -155,6 +182,7 @@ func IntegrationConfigFromYAML(cfg *config.IntegrationsConfig) IntegrationConfig
 	return IntegrationConfig{
 		Herald:           cfg.Herald.ToHeraldConfig(),
 		FalkorDB:         cfg.FalkorDB.ToFalkorDBConfig(),
+		AgentDB:          cfg.AgentDB.ToAgentDBConfig(),
 		MCP:              cfg.MCP.ToMCPConfig(),
 		Checkpoint:       storageConfig,
 		CheckpointPolicy: policyConfig,
