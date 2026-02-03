@@ -184,7 +184,6 @@ spec:
     context:
       - type: agents
       - type: project
-      - type: tools
 
   handoff:
     allowedTargets: ["*"]
