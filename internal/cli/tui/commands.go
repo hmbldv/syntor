@@ -139,6 +139,26 @@ func (r *CommandRegistry) registerBuiltinCommands() {
 		Description: "List available skills",
 		Category:    "system",
 	}
+	r.commands["usage"] = Command{
+		Name:        "usage",
+		Description: "Show token usage and context stats",
+		Category:    "system",
+	}
+	r.commands["init-project"] = Command{
+		Name:        "init-project",
+		Description: "Create SYNTOR.md for current project",
+		Category:    "system",
+	}
+	r.commands["init-global"] = Command{
+		Name:        "init-global",
+		Description: "Create global CENTAUR.md",
+		Category:    "system",
+	}
+	r.commands["route"] = Command{
+		Name:        "route",
+		Description: "Query FalkorDB for agent routing",
+		Category:    "agent",
+	}
 }
 
 // loadCustomCommands loads custom commands from config directories
