@@ -38,9 +38,13 @@ type ChatMessage struct {
 // ActivityStatus represents what the system is currently doing
 type ActivityStatus struct {
 	Active      bool
-	Type        string // "thinking", "streaming", "tools", "searching", "planning"
+	Type        string // "thinking", "streaming", "tools", "searching", "planning", "agent", "handoff"
 	Description string
 	StartTime   time.Time
+	Icon        string           // Nerd Font icon for this activity
+	Agent       string           // Which agent is performing the activity
+	Tool        string           // Which tool is being executed (if applicable)
+	Parent      *ActivityStatus  // For nested activities (e.g., tool within agent task)
 }
 
 // AutonomyMode defines how the coordination agent handles tasks
@@ -1305,34 +1309,55 @@ func (m *Model) renderStatusBar() string {
 	return m.styles.StatusBar.Width(m.width).Render(status)
 }
 
-// renderActivityStatus renders the activity status line
+// renderActivityStatus renders the activity status line with Nerd Font icons and animated spinner
 func (m *Model) renderActivityStatus() string {
-	// Activity icons based on type
-	icons := map[string]string{
-		"thinking":  "🤔",
-		"streaming": "📝",
-		"tools":     "🔧",
-		"searching": "🔍",
-		"planning":  "📋",
-		"agent":     "🤖",
-		"loading":   "⏳",
-	}
+	// Get animated spinner frame based on elapsed time
+	elapsed := time.Since(m.activity.StartTime)
+	spinnerFrame := NerdAnimatedSpinner.Frame(elapsed)
 
-	icon := icons[m.activity.Type]
-	if icon == "" {
-		icon = "⏳"
+	// Get activity-specific icon
+	activityIcon := m.activity.Icon
+	if activityIcon == "" {
+		activityIcon = GetActivityIcon(m.activity.Type)
 	}
 
 	// Calculate duration
-	duration := time.Since(m.activity.StartTime)
-	durationStr := fmt.Sprintf("%.1fs", duration.Seconds())
+	durationStr := fmt.Sprintf("%.1fs", elapsed.Seconds())
 
-	// Build the status line
-	iconStyled := m.styles.ActivityIcon.Render(icon)
+	// Build the status line with format: [spinner] [icon] Agent: description (duration)
+	var statusParts []string
+
+	// Add spinner
+	spinnerStyled := m.styles.ActivityIcon.Render(spinnerFrame)
+	statusParts = append(statusParts, spinnerStyled)
+
+	// Add activity icon
+	iconStyled := m.styles.ActivityIcon.Render(activityIcon)
+	statusParts = append(statusParts, iconStyled)
+
+	// Add agent name if present
+	if m.activity.Agent != "" {
+		agentIcon := GetAgentIcon(m.activity.Agent)
+		agentStyled := m.styles.StatusAgent.Render(agentIcon + " " + m.activity.Agent + ":")
+		statusParts = append(statusParts, agentStyled)
+	}
+
+	// Add tool info if present
+	if m.activity.Tool != "" {
+		toolIcon := GetToolIcon(m.activity.Tool)
+		toolStyled := m.styles.StatusModel.Render("[" + toolIcon + " " + m.activity.Tool + "]")
+		statusParts = append(statusParts, toolStyled)
+	}
+
+	// Add description
 	textStyled := m.styles.ActivityText.Render(m.activity.Description)
-	durationStyled := m.styles.ActivityDuration.Render("(" + durationStr + ")")
+	statusParts = append(statusParts, textStyled)
 
-	return m.styles.ActivityBar.Render(iconStyled + " " + textStyled + " " + durationStyled)
+	// Add duration
+	durationStyled := m.styles.ActivityDuration.Render("(" + durationStr + ")")
+	statusParts = append(statusParts, durationStyled)
+
+	return m.styles.ActivityBar.Render(strings.Join(statusParts, " "))
 }
 
 // setActivity sets the current activity status
@@ -1342,6 +1367,33 @@ func (m *Model) setActivity(activityType, description string) {
 		Type:        activityType,
 		Description: description,
 		StartTime:   time.Now(),
+		Icon:        GetActivityIcon(activityType),
+		Agent:       getAgentDisplayName(m.currentAgent),
+	}
+}
+
+// setActivityWithTool sets activity with tool context
+func (m *Model) setActivityWithTool(activityType, description, toolName string) {
+	m.activity = ActivityStatus{
+		Active:      true,
+		Type:        activityType,
+		Description: description,
+		StartTime:   time.Now(),
+		Icon:        GetToolIcon(toolName),
+		Agent:       getAgentDisplayName(m.currentAgent),
+		Tool:        toolName,
+	}
+}
+
+// setActivityWithAgent sets activity with explicit agent context
+func (m *Model) setActivityWithAgent(activityType, description, agentName string) {
+	m.activity = ActivityStatus{
+		Active:      true,
+		Type:        activityType,
+		Description: description,
+		StartTime:   time.Now(),
+		Icon:        GetActivityIcon(activityType),
+		Agent:       agentName,
 	}
 }
 

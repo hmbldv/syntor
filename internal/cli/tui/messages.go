@@ -94,6 +94,43 @@ type HandoffCompletedMsg struct {
 	Result *coordination.HandoffResult
 }
 
+// ActivityStartMsg signals the start of a new activity
+type ActivityStartMsg struct {
+	Type        string // thinking, streaming, tools, searching, planning, agent, handoff
+	Description string
+	Agent       string // Which agent is performing
+	Tool        string // Which tool (if applicable)
+	Nested      bool   // Is this a nested activity?
+}
+
+// ActivityUpdateMsg updates the current activity description/progress
+type ActivityUpdateMsg struct {
+	Description string
+	Progress    float64 // 0.0 to 1.0 for progress-based activities
+}
+
+// ActivityEndMsg signals the end of an activity
+type ActivityEndMsg struct {
+	Success bool
+	Error   error
+}
+
+// ToolActivityMsg signals tool-specific activity for enhanced display
+type ToolActivityMsg struct {
+	ToolName    string
+	Operation   string // read, write, edit, execute, search
+	Description string
+	Icon        string
+}
+
+// AgentHandoffActivityMsg signals agent handoff activity for visualization
+type AgentHandoffActivityMsg struct {
+	FromAgent string
+	ToAgent   string
+	Task      string
+	Status    string // started, in_progress, completed, failed
+}
+
 // ClipboardCopyMsg signals that content was copied to clipboard
 type ClipboardCopyMsg struct {
 	Success bool
