@@ -16,6 +16,7 @@ import (
 	"github.com/syntor/syntor/pkg/checkpoint"
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/coordination"
+	"github.com/syntor/syntor/pkg/falkordb"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/manifest"
 	"github.com/syntor/syntor/pkg/prompt"
@@ -132,6 +133,11 @@ type Model struct {
 	sessionInitialized bool
 	sessionStartTime   time.Time
 
+	// Token tracking
+	sessionInputTokens  int64
+	sessionOutputTokens int64
+	globalContext       string // Content from CENTAUR.md
+
 	// Terminal
 	width  int
 	height int
@@ -204,6 +210,9 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 	// Load project context from SYNTOR.md
 	projectContext, _ := config.GetProjectContext()
 
+	// Load global context from CENTAUR.md
+	globalContext, _ := config.GetGlobalContext()
+
 	// Initialize skill manager
 	skillManager := skills.NewSkillManager()
 	skillManager.LoadAll()
@@ -243,6 +252,7 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		providerReady:   false,
 		services:        services,
 		projectContext:  projectContext,
+		globalContext:   globalContext,
 		skillManager:    skillManager,
 		stats:           statsTracker,
 	}
@@ -868,13 +878,7 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "status":
-		modelID := m.registry.GetModelForAgent(m.currentAgent)
-		status := fmt.Sprintf("Agent: %s | Model: %s | Provider: %s",
-			getAgentDisplayName(m.currentAgent), modelID, m.config.Inference.Provider)
-		m.addSystemMessage(status)
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		return m, nil
+		return m.handleStatus()
 
 	case "models":
 		models := m.registry.GetAvailableModels()
@@ -970,11 +974,23 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "init":
 		return m.handleInit()
 
+	case "init-project":
+		return m.handleInitProject()
+
+	case "init-global":
+		return m.handleInitGlobal()
+
+	case "usage":
+		return m.handleUsage()
+
 	case "end":
 		return m.handleEndSession()
 
 	case "agents":
 		return m.handleAgentsStatus()
+
+	case "route":
+		return m.handleRoute(args)
 
 	case "plan":
 		return m.handlePlanMode()
@@ -1074,13 +1090,16 @@ func (m *Model) fetchResponse(ctx context.Context, provider inference.Provider, 
 	// Build system prompt before closure to capture current state
 	systemPrompt := m.buildDynamicPrompt(m.currentAgent)
 
+	// Capture conversation history for the closure
+	// This maintains multi-turn conversation context
+	conversationHistory := make([]inference.Message, len(m.conversationHistory))
+	copy(conversationHistory, m.conversationHistory)
+
 	return func() tea.Msg {
 		req := inference.ChatRequest{
-			Model: modelID,
-			Messages: []inference.Message{
-				{Role: "user", Content: message},
-			},
-			System: systemPrompt,
+			Model:    modelID,
+			Messages: conversationHistory,
+			System:   systemPrompt,
 		}
 
 		resp, err := provider.Chat(ctx, req)
@@ -1096,13 +1115,16 @@ func (m *Model) streamChat(ctx context.Context, provider inference.Provider, mod
 	// Build system prompt before creating goroutine to capture current state
 	systemPrompt := m.buildDynamicPrompt(m.currentAgent)
 
-	// Build request
+	// Capture conversation history for the closure
+	// This maintains multi-turn conversation context
+	conversationHistory := make([]inference.Message, len(m.conversationHistory))
+	copy(conversationHistory, m.conversationHistory)
+
+	// Build request with full conversation history
 	req := inference.ChatRequest{
-		Model: modelID,
-		Messages: []inference.Message{
-			{Role: "user", Content: message},
-		},
-		System: systemPrompt,
+		Model:    modelID,
+		Messages: conversationHistory,
+		System:   systemPrompt,
 	}
 
 	// Create a channel for streaming chunks
@@ -1537,22 +1559,26 @@ func wrapText(text string, width int) string {
 func (m *Model) renderHelp() string {
 	var sb strings.Builder
 	sb.WriteString("=== SYNTOR Commands ===\n\n")
-	sb.WriteString("Agent Commands:\n")
-	sb.WriteString("  /sntr          - Switch to sntr agent (primary orchestrator with tools)\n")
+	sb.WriteString("Agent Commands (from FalkorDB):\n")
+	sb.WriteString("  /agents        - List all agents from FalkorDB graph\n")
+	sb.WriteString("  /route <type>  - Query routing for a task type\n")
+	sb.WriteString("  /sntr          - Switch to sntr orchestrator\n")
 	sb.WriteString("  /docs          - Switch to documentation agent\n")
 	sb.WriteString("  /git           - Switch to git agent\n")
-	sb.WriteString("  /worker        - Switch to general worker agent\n")
+	sb.WriteString("  /worker        - Switch to worker agent\n")
 	sb.WriteString("  /code          - Switch to code worker agent\n\n")
 	sb.WriteString("Session Commands:\n")
 	sb.WriteString("  /init          - Initialize session, load context\n")
+	sb.WriteString("  /init-project  - Create SYNTOR.md for current project\n")
+	sb.WriteString("  /init-global   - Create global CENTAUR.md\n")
 	sb.WriteString("  /end           - Wrap up session, save state\n")
-	sb.WriteString("  /agents        - Show agent status dashboard\n")
 	sb.WriteString("  /plan          - Enter plan mode for complex tasks\n")
 	sb.WriteString("  /checkpoint    - Create manual checkpoint\n")
 	sb.WriteString("  /skills        - List available skills\n\n")
 	sb.WriteString("System Commands:\n")
 	sb.WriteString("  /help          - Show this help\n")
-	sb.WriteString("  /status        - Show current agent and model\n")
+	sb.WriteString("  /status        - Show full system status\n")
+	sb.WriteString("  /usage         - Show token usage and context stats\n")
 	sb.WriteString("  /models        - List available models\n")
 	sb.WriteString("  /config        - Show configuration\n")
 	sb.WriteString("  /clear         - Clear the screen\n")
@@ -1594,11 +1620,26 @@ func (m Model) handleInit() (tea.Model, tea.Cmd) {
 		m.stats.Save()
 	}
 
+	// Check global context (CENTAUR.md)
+	if m.globalContext != "" {
+		sb.WriteString("Global context: loaded from CENTAUR.md\n")
+	} else {
+		sb.WriteString("Global context: not found\n")
+		// Offer to create default
+		if !config.GlobalContextExists() {
+			sb.WriteString("  → Run /init-global to create default CENTAUR.md\n")
+		}
+	}
+
 	// Load project context
 	if m.projectContext != "" {
 		sb.WriteString("Project context: loaded from SYNTOR.md\n")
 	} else {
-		sb.WriteString("Project context: not found (create SYNTOR.md)\n")
+		sb.WriteString("Project context: not found\n")
+		// Offer to create
+		if !config.ProjectMarkdownExists() {
+			sb.WriteString("  → Run /init-project to create SYNTOR.md for this directory\n")
+		}
 	}
 
 	// Show loaded skills
@@ -1640,7 +1681,313 @@ func (m Model) handleInit() (tea.Model, tea.Cmd) {
 
 	// Show working directory
 	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", m.workingDir))
+
+	// Show token usage summary
+	if m.stats != nil {
+		today := m.stats.GetTodayStats()
+		if today.Input+today.Output > 0 {
+			sb.WriteString(fmt.Sprintf("Today's tokens: %d\n", today.Input+today.Output))
+		}
+	}
+
 	sb.WriteString("\nReady to assist!")
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleInitProject creates a SYNTOR.md file for the current project
+func (m Model) handleInitProject() (tea.Model, tea.Cmd) {
+	if config.ProjectMarkdownExists() {
+		m.addSystemMessage("SYNTOR.md already exists in this project.")
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	// Get current directory name as project name
+	projectName := filepath.Base(m.workingDir)
+
+	// Create the file
+	err := config.CreateProjectMarkdown(projectName, "A project managed with SYNTOR.")
+	if err != nil {
+		m.addSystemMessage(fmt.Sprintf("Failed to create SYNTOR.md: %v", err))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	// Reload project context
+	projectContext, _ := config.GetProjectContext()
+	m.projectContext = projectContext
+
+	m.addSystemMessage(fmt.Sprintf("Created SYNTOR.md in %s\n\nEdit this file to add project-specific context for the AI.", m.workingDir))
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleInitGlobal creates the global CENTAUR.md file
+func (m Model) handleInitGlobal() (tea.Model, tea.Cmd) {
+	if config.GlobalContextExists() {
+		m.addSystemMessage("CENTAUR.md already exists at " + config.GlobalContextPath())
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	// Create the file
+	err := config.CreateDefaultGlobalContext()
+	if err != nil {
+		m.addSystemMessage(fmt.Sprintf("Failed to create CENTAUR.md: %v", err))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	// Reload global context
+	globalContext, _ := config.GetGlobalContext()
+	m.globalContext = globalContext
+
+	m.addSystemMessage(fmt.Sprintf("Created CENTAUR.md at %s\n\nThis provides global system context for all sessions.", config.GlobalContextPath()))
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleUsage displays token usage and context statistics
+func (m Model) handleUsage() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Session Usage ===\n\n")
+
+	// Session token stats
+	sb.WriteString(fmt.Sprintf("Session tokens:\n"))
+	sb.WriteString(fmt.Sprintf("  Input:  %d\n", m.sessionInputTokens))
+	sb.WriteString(fmt.Sprintf("  Output: %d\n", m.sessionOutputTokens))
+	sb.WriteString(fmt.Sprintf("  Total:  %d\n", m.sessionInputTokens+m.sessionOutputTokens))
+
+	// Daily stats from stats.json
+	if m.stats != nil {
+		today := m.stats.GetTodayStats()
+		sb.WriteString(fmt.Sprintf("\nToday's usage:\n"))
+		sb.WriteString(fmt.Sprintf("  Sessions:   %d\n", today.Sessions))
+		sb.WriteString(fmt.Sprintf("  Tokens:     %d\n", today.Input+today.Output))
+		sb.WriteString(fmt.Sprintf("  Tool calls: %d\n", today.Tools))
+	}
+
+	// Model and context info
+	modelID := m.registry.GetModelForAgent(m.currentAgent)
+	sb.WriteString(fmt.Sprintf("\nModel: %s\n", modelID))
+
+	// Estimate context window based on model
+	contextWindow := getModelContextWindow(modelID)
+	if contextWindow > 0 {
+		// Rough estimate: 4 chars per token for conversation
+		estimatedTokens := len(strings.Join(func() []string {
+			var contents []string
+			for _, msg := range m.conversationHistory {
+				contents = append(contents, msg.Content)
+			}
+			return contents
+		}(), "")) / 4
+		usedPercent := float64(estimatedTokens) / float64(contextWindow) * 100
+		sb.WriteString(fmt.Sprintf("Context: ~%.0f%% used (%d / %d tokens)\n", usedPercent, estimatedTokens, contextWindow))
+
+		if usedPercent > 75 {
+			sb.WriteString("\n⚠️  Context usage high - consider:\n")
+			sb.WriteString("  - /clear to start fresh\n")
+			sb.WriteString("  - /checkpoint to save state\n")
+		}
+	}
+
+	// Conversation stats
+	sb.WriteString(fmt.Sprintf("\nConversation history: %d messages\n", len(m.conversationHistory)))
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// getModelContextWindow returns the context window size for a model
+func getModelContextWindow(modelID string) int {
+	// Common model context windows
+	contextWindows := map[string]int{
+		"llama3.2:3b":          8192,
+		"llama3.2:8b":          8192,
+		"llama3.1:8b":          128000,
+		"llama3.1:70b":         128000,
+		"mistral:7b":           32768,
+		"mixtral:8x7b":         32768,
+		"qwen2.5-coder:7b":     32768,
+		"qwen2.5-coder:14b":    32768,
+		"deepseek-coder-v2:16b": 128000,
+		"claude-3-opus":        200000,
+		"claude-3-sonnet":      200000,
+		"claude-3-haiku":       200000,
+	}
+
+	if size, ok := contextWindows[modelID]; ok {
+		return size
+	}
+
+	// Default for unknown models
+	return 8192
+}
+
+// handleRoute queries FalkorDB to find the best agent for a task type
+func (m Model) handleRoute(taskType string) (tea.Model, tea.Cmd) {
+	if taskType == "" {
+		m.addSystemMessage("Usage: /route <task_type>\n\nExamples:\n  /route code_development\n  /route security_assessment\n  /route budget\n  /route deep_research")
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Routing: %s ===\n\n", taskType))
+
+	if m.services != nil && m.services.FalkorDBAvailable && m.services.FalkorDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		result, err := m.services.FalkorDB.RouteTask(ctx, falkordb.RouteQuery{
+			TaskType: taskType,
+		})
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("Routing error: %v\n", err))
+		} else {
+			sb.WriteString(fmt.Sprintf("Agent: %s\n", result.Agent.Name))
+			if result.Agent.Role != "" {
+				sb.WriteString(fmt.Sprintf("Role: %s\n", result.Agent.Role))
+			}
+			if result.Agent.Focus != "" {
+				sb.WriteString(fmt.Sprintf("Focus: %s\n", result.Agent.Focus))
+			}
+			if result.Team != nil {
+				sb.WriteString(fmt.Sprintf("Team: %s\n", result.Team.Name))
+			}
+			if len(result.Route.Chain) > 0 {
+				sb.WriteString(fmt.Sprintf("Chain: %s\n", strings.Join(result.Route.Chain, " → ")))
+			}
+			if result.Agent.DefinitionPath != "" {
+				sb.WriteString(fmt.Sprintf("Definition: %s\n", result.Agent.DefinitionPath))
+			}
+		}
+	} else {
+		sb.WriteString("FalkorDB not connected.\n\n")
+		sb.WriteString("Using fallback routing:\n")
+		// Use static fallback
+		if agent, ok := falkordb.FallbackRoutes[taskType]; ok {
+			sb.WriteString(fmt.Sprintf("  %s → %s\n", taskType, agent))
+		} else {
+			sb.WriteString(fmt.Sprintf("  No route found for: %s\n", taskType))
+		}
+	}
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleStatus shows comprehensive system status
+func (m Model) handleStatus() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Centaur Status ===\n\n")
+
+	// Agent and model
+	modelID := m.registry.GetModelForAgent(m.currentAgent)
+	modeName := "Auto"
+	if m.autonomyMode == PlanMode {
+		modeName = "Plan"
+	}
+	sb.WriteString(fmt.Sprintf("Agent: %s (%s)\n", getAgentDisplayName(m.currentAgent), modelID))
+	sb.WriteString(fmt.Sprintf("Mode: %s\n", modeName))
+	sb.WriteString(fmt.Sprintf("Provider: %s\n", m.config.Inference.Provider))
+
+	// Session info
+	if m.sessionInitialized {
+		duration := time.Since(m.sessionStartTime)
+		sb.WriteString(fmt.Sprintf("Session: active (%s)\n", duration.Round(time.Second)))
+	} else {
+		sb.WriteString("Session: not initialized (run /init)\n")
+	}
+
+	// Context hierarchy
+	sb.WriteString("\nContext:\n")
+	if m.globalContext != "" {
+		sb.WriteString(fmt.Sprintf("  Global: %s ✓\n", config.GlobalContextPath()))
+	} else {
+		sb.WriteString("  Global: ~/.syntor/CENTAUR.md ✗\n")
+	}
+	if m.projectContext != "" {
+		sb.WriteString("  Project: ./SYNTOR.md ✓\n")
+	} else {
+		sb.WriteString("  Project: ./SYNTOR.md ✗\n")
+	}
+
+	// Skills
+	if m.skillManager != nil {
+		skillCount := m.skillManager.Count()
+		if skillCount > 0 {
+			alwaysActive := m.skillManager.GetAlwaysActive()
+			if len(alwaysActive) > 0 {
+				var activeNames []string
+				for _, s := range alwaysActive {
+					activeNames = append(activeNames, s.Name)
+				}
+				sb.WriteString(fmt.Sprintf("  Skills: %d loaded (%s)\n", skillCount, strings.Join(activeNames, ", ")))
+			} else {
+				sb.WriteString(fmt.Sprintf("  Skills: %d loaded (none always-active)\n", skillCount))
+			}
+		} else {
+			sb.WriteString("  Skills: 0 loaded\n")
+		}
+	}
+
+	// Services
+	sb.WriteString("\nServices:\n")
+	if m.services != nil {
+		if m.services.HeraldAvailable {
+			sb.WriteString("  Herald: connected ✓\n")
+		} else {
+			sb.WriteString("  Herald: disconnected ✗\n")
+		}
+		if m.services.FalkorDBAvailable {
+			sb.WriteString("  FalkorDB: connected ✓\n")
+		} else {
+			sb.WriteString("  FalkorDB: disconnected ✗\n")
+		}
+		if m.services.MCPToolCount > 0 {
+			sb.WriteString(fmt.Sprintf("  MCP Tools: %d available\n", m.services.MCPToolCount))
+		}
+	} else {
+		sb.WriteString("  No service integrations configured\n")
+	}
+
+	// Active handoffs
+	if len(m.activeHandoffs) > 0 {
+		sb.WriteString("\nActive Handoffs:\n")
+		for _, h := range m.activeHandoffs {
+			if h.Status == coordination.HandoffExecuting {
+				duration := time.Since(h.StartTime)
+				sb.WriteString(fmt.Sprintf("  %s → %s (%s)\n", h.FromAgent, h.ToAgent, duration.Round(time.Second)))
+			}
+		}
+	} else {
+		sb.WriteString("\nActive Handoffs: none\n")
+	}
+
+	// Tool system
+	if m.toolRegistry != nil {
+		sb.WriteString(fmt.Sprintf("\nTools: available (iterations: %d/%d)\n", m.toolIterations, m.maxToolIterations))
+	}
+
+	// Working directory
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", m.workingDir))
 
 	m.addSystemMessage(sb.String())
 	m.viewport.SetContent(m.renderMessages())
@@ -1749,39 +2096,60 @@ func (m Model) handleAgentsStatus() (tea.Model, tea.Cmd) {
 		sb.WriteString("Active Handoffs: none\n\n")
 	}
 
-	// Available agents
+	// Available agents from FalkorDB
 	sb.WriteString("Available Agents:\n")
-	agents := []struct {
-		name  string
-		desc  string
-		agent inference.AgentType
-	}{
-		{"sntr", "Primary orchestrator with tools", inference.AgentSNTR},
-		{"docs", "Documentation specialist", inference.AgentDocumentation},
-		{"git", "Git operations", inference.AgentGit},
-		{"worker", "General tasks", inference.AgentWorker},
-		{"code", "Code generation", inference.AgentWorkerCode},
-	}
-	for _, a := range agents {
-		indicator := "  "
-		if a.agent == m.currentAgent {
-			indicator = "> "
+	if m.services != nil && m.services.FalkorDBAvailable && m.services.FalkorDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		agents, err := m.services.FalkorDB.ListAgents(ctx, "")
+		if err == nil && len(agents) > 0 {
+			for _, agent := range agents {
+				desc := agent.Description
+				if desc == "" {
+					desc = agent.Role
+				}
+				if desc == "" {
+					desc = string(agent.Type)
+				}
+				sb.WriteString(fmt.Sprintf("  %-12s - %s\n", agent.Name, desc))
+			}
+		} else {
+			sb.WriteString("  (FalkorDB query failed, showing local agents)\n")
+			sb.WriteString("  sntr         - Primary orchestrator with tools\n")
 		}
-		sb.WriteString(fmt.Sprintf("%s%-8s - %s\n", indicator, a.name, a.desc))
+	} else {
+		sb.WriteString("  (FalkorDB not connected - run /agents-sync to update)\n")
+		// Show minimal fallback when FalkorDB is unavailable
+		sb.WriteString("  sntr         - Primary orchestrator\n")
+	}
+
+	// Graph stats if available
+	if m.services != nil && m.services.FalkorDBAvailable && m.services.FalkorDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		stats, err := m.services.FalkorDB.GetStats(ctx)
+		if err == nil {
+			sb.WriteString(fmt.Sprintf("\nGraph Stats:\n"))
+			sb.WriteString(fmt.Sprintf("  Agents: %d\n", stats.AgentCount))
+			sb.WriteString(fmt.Sprintf("  Teams: %d\n", stats.TeamCount))
+			sb.WriteString(fmt.Sprintf("  Relationships: %d\n", stats.RelationshipCount))
+		}
 	}
 
 	// Integration status
 	sb.WriteString("\nIntegrations:\n")
 	if m.services != nil {
 		if m.services.HeraldAvailable {
-			sb.WriteString("  Herald: connected\n")
+			sb.WriteString("  Herald: connected ✓\n")
 		} else {
-			sb.WriteString("  Herald: disconnected\n")
+			sb.WriteString("  Herald: disconnected ✗\n")
 		}
 		if m.services.FalkorDBAvailable {
-			sb.WriteString("  FalkorDB: connected\n")
+			sb.WriteString("  FalkorDB: connected ✓\n")
 		} else {
-			sb.WriteString("  FalkorDB: disconnected\n")
+			sb.WriteString("  FalkorDB: disconnected ✗\n")
 		}
 	}
 
@@ -1891,6 +2259,7 @@ func (m Model) handleSkillsList() (tea.Model, tea.Cmd) {
 
 // buildDynamicPrompt builds a system prompt using the manifest-based prompt builder
 // Falls back to static prompts if the builder isn't available
+// Context Hierarchy: Global (CENTAUR.md) → Project (SYNTOR.md) → Skills
 func (m *Model) buildDynamicPrompt(agentType inference.AgentType) string {
 	var basePrompt string
 
@@ -1915,9 +2284,14 @@ func (m *Model) buildDynamicPrompt(agentType inference.AgentType) string {
 		basePrompt = getSystemPrompt(agentType)
 	}
 
-	// Append project context from SYNTOR.md if available
+	// Inject global context from CENTAUR.md first (device-level)
+	if m.globalContext != "" {
+		basePrompt = basePrompt + "\n\n<global-context>\n" + m.globalContext + "\n</global-context>"
+	}
+
+	// Append project context from SYNTOR.md (project-level)
 	if m.projectContext != "" {
-		basePrompt = basePrompt + "\n\n---\n\n" + m.projectContext
+		basePrompt = basePrompt + "\n\n<project-context>\n" + m.projectContext + "\n</project-context>"
 	}
 
 	// Inject always-active skills
