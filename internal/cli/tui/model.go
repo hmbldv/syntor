@@ -226,9 +226,14 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 	statsTracker, _ := stats.Load()
 
 	// Initialize handoff executor for real agent delegation
+	// Uses FalkorDB for dynamic model lookup when available
 	var handoffExecutor *coordination.Executor
 	if manifestStore != nil && promptBuilder != nil {
-		handoffExecutor = coordination.NewExecutor(registry, manifestStore, promptBuilder)
+		var falkorClient *falkordb.Client
+		if services != nil && services.FalkorDB != nil {
+			falkorClient = services.FalkorDB
+		}
+		handoffExecutor = coordination.NewExecutor(registry, manifestStore, promptBuilder, falkorClient)
 	}
 
 	// Initial messages will be populated on first render when we know the width
