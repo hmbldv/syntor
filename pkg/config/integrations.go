@@ -3,6 +3,7 @@ package config
 import (
 	"time"
 
+	"github.com/syntor/syntor/pkg/agentdb"
 	"github.com/syntor/syntor/pkg/checkpoint"
 	"github.com/syntor/syntor/pkg/falkordb"
 	"github.com/syntor/syntor/pkg/herald"
@@ -15,6 +16,7 @@ import (
 type IntegrationsConfig struct {
 	Herald     HeraldConfig     `yaml:"herald" json:"herald"`
 	FalkorDB   FalkorDBConfig   `yaml:"falkordb" json:"falkordb"`
+	AgentDB    AgentDBConfig    `yaml:"agentdb" json:"agentdb"`
 	MCP        MCPConfig        `yaml:"mcp" json:"mcp"`
 	Checkpoint CheckpointConfig `yaml:"checkpoint" json:"checkpoint"`
 	Hooks      HooksConfig      `yaml:"hooks" json:"hooks"`
@@ -63,6 +65,33 @@ func (c *FalkorDBConfig) ToFalkorDBConfig() falkordb.Config {
 		GraphName: c.GraphName,
 		Timeout:   c.Timeout,
 		CacheTTL:  c.CacheTTL,
+	}
+}
+
+// AgentDBConfig holds PostgreSQL agent database configuration.
+type AgentDBConfig struct {
+	Enabled  bool          `yaml:"enabled" json:"enabled"`
+	Host     string        `yaml:"host" json:"host"`
+	Port     int           `yaml:"port" json:"port"`
+	Database string        `yaml:"database" json:"database"`
+	Schema   string        `yaml:"schema" json:"schema"`
+	User     string        `yaml:"user" json:"user"`
+	Password string        `yaml:"password" json:"password"`
+	SSLMode  string        `yaml:"ssl_mode" json:"ssl_mode"`
+	CacheTTL time.Duration `yaml:"cache_ttl" json:"cache_ttl"`
+}
+
+// ToAgentDBConfig converts to agentdb.Config.
+func (c *AgentDBConfig) ToAgentDBConfig() agentdb.Config {
+	return agentdb.Config{
+		Host:     c.Host,
+		Port:     c.Port,
+		Database: c.Database,
+		Schema:   c.Schema,
+		User:     c.User,
+		Password: c.Password,
+		SSLMode:  c.SSLMode,
+		CacheTTL: c.CacheTTL,
 	}
 }
 
@@ -207,6 +236,15 @@ func DefaultIntegrationsConfig() IntegrationsConfig {
 			Timeout:   10 * time.Second,
 			CacheTTL:  5 * time.Minute,
 		},
+		AgentDB: AgentDBConfig{
+			Enabled:  true,
+			Host:     "192.168.1.61",
+			Port:     5433,
+			Database: "hive",
+			Schema:   "agents",
+			SSLMode:  "disable",
+			CacheTTL: 5 * time.Minute,
+		},
 		MCP: MCPConfig{
 			AutoConnect:    true,
 			DefaultTimeout: 30 * time.Second,
@@ -319,6 +357,15 @@ integrations:
     enabled: true
     address: 192.168.1.61:6379
     graph_name: agents
+    cache_ttl: 5m
+
+  agentdb:
+    enabled: true
+    host: 192.168.1.61
+    port: 5433
+    database: hive
+    schema: agents
+    ssl_mode: disable
     cache_ttl: 5m
 
   mcp:
