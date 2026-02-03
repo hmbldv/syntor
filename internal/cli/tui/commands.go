@@ -107,6 +107,38 @@ func (r *CommandRegistry) registerBuiltinCommands() {
 		Description: "Copy code block to clipboard (/copy [n])",
 		Category:    "system",
 	}
+
+	// Session commands (Claude Code parity)
+	r.commands["init"] = Command{
+		Name:        "init",
+		Description: "Initialize session, load context",
+		Category:    "system",
+	}
+	r.commands["end"] = Command{
+		Name:        "end",
+		Description: "Wrap up session, save state",
+		Category:    "system",
+	}
+	r.commands["agents"] = Command{
+		Name:        "agents",
+		Description: "Show agent status dashboard",
+		Category:    "system",
+	}
+	r.commands["plan"] = Command{
+		Name:        "plan",
+		Description: "Enter plan mode for complex tasks",
+		Category:    "system",
+	}
+	r.commands["checkpoint"] = Command{
+		Name:        "checkpoint",
+		Description: "Create manual checkpoint",
+		Category:    "system",
+	}
+	r.commands["skills"] = Command{
+		Name:        "skills",
+		Description: "List available skills",
+		Category:    "system",
+	}
 }
 
 // loadCustomCommands loads custom commands from config directories

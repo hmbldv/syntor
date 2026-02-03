@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,12 +13,15 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/syntor/syntor/pkg/checkpoint"
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/coordination"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/manifest"
 	"github.com/syntor/syntor/pkg/prompt"
 	"github.com/syntor/syntor/pkg/setup"
+	"github.com/syntor/syntor/pkg/skills"
+	"github.com/syntor/syntor/pkg/stats"
 	"github.com/syntor/syntor/pkg/tools"
 	"github.com/syntor/syntor/pkg/tools/implementations"
 	"github.com/syntor/syntor/pkg/tools/security"
@@ -114,6 +118,20 @@ type Model struct {
 	cancelFunc    context.CancelFunc
 	providerReady bool
 
+	// Service integrations
+	services       *IntegratedServices
+	projectContext string // Content from SYNTOR.md
+
+	// Skills system
+	skillManager *skills.SkillManager
+
+	// Stats tracking
+	stats *stats.Stats
+
+	// Session state
+	sessionInitialized bool
+	sessionStartTime   time.Time
+
 	// Terminal
 	width  int
 	height int
@@ -178,6 +196,21 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		toolExecutor = tools.NewExecutor(toolRegistry, securityMgr)
 	}
 
+	// Initialize service integrations
+	ctx := context.Background()
+	intConfig := IntegrationConfigFromYAML(&cfg.Integrations)
+	services, _ := NewIntegratedServices(ctx, &intConfig)
+
+	// Load project context from SYNTOR.md
+	projectContext, _ := config.GetProjectContext()
+
+	// Initialize skill manager
+	skillManager := skills.NewSkillManager()
+	skillManager.LoadAll()
+
+	// Initialize stats tracking
+	statsTracker, _ := stats.Load()
+
 	// Initial messages will be populated on first render when we know the width
 	initialMessages := []ChatMessage{}
 
@@ -208,6 +241,10 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		config:          cfg,
 		registry:        registry,
 		providerReady:   false,
+		services:        services,
+		projectContext:  projectContext,
+		skillManager:    skillManager,
+		stats:           statsTracker,
 	}
 
 	return m, nil
@@ -930,6 +967,24 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		return m, m.copyCodeBlock(index)
 
+	case "init":
+		return m.handleInit()
+
+	case "end":
+		return m.handleEndSession()
+
+	case "agents":
+		return m.handleAgentsStatus()
+
+	case "plan":
+		return m.handlePlanMode()
+
+	case "checkpoint":
+		return m.handleCheckpoint()
+
+	case "skills":
+		return m.handleSkillsList()
+
 	default:
 		// Check if it's a custom command
 		if cmd, ok := m.cmdRegistry.GetCommand(cmdName); ok && cmd.Category == "custom" {
@@ -1209,6 +1264,15 @@ func (m *Model) renderStatusBar() string {
 	model := m.styles.StatusModel.Render(modelID)
 
 	status := mode + " " + agent + " | " + model
+
+	// Add integration status indicators
+	if m.services != nil {
+		integrationStatus := m.services.RenderStatusBar()
+		if integrationStatus != "" {
+			status += " | " + m.styles.StatusModel.Render(integrationStatus)
+		}
+	}
+
 	if m.streaming {
 		status += " | " + m.styles.StatusStreaming.Render("streaming...")
 	}
@@ -1479,6 +1543,13 @@ func (m *Model) renderHelp() string {
 	sb.WriteString("  /git           - Switch to git agent\n")
 	sb.WriteString("  /worker        - Switch to general worker agent\n")
 	sb.WriteString("  /code          - Switch to code worker agent\n\n")
+	sb.WriteString("Session Commands:\n")
+	sb.WriteString("  /init          - Initialize session, load context\n")
+	sb.WriteString("  /end           - Wrap up session, save state\n")
+	sb.WriteString("  /agents        - Show agent status dashboard\n")
+	sb.WriteString("  /plan          - Enter plan mode for complex tasks\n")
+	sb.WriteString("  /checkpoint    - Create manual checkpoint\n")
+	sb.WriteString("  /skills        - List available skills\n\n")
 	sb.WriteString("System Commands:\n")
 	sb.WriteString("  /help          - Show this help\n")
 	sb.WriteString("  /status        - Show current agent and model\n")
@@ -1508,9 +1579,321 @@ func getAgentDisplayName(t inference.AgentType) string {
 	}
 }
 
+// handleInit initializes the session, loading context and skills
+func (m Model) handleInit() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Session Initialized ===\n\n")
+
+	// Mark session as initialized
+	m.sessionInitialized = true
+	m.sessionStartTime = time.Now()
+
+	// Record session start in stats
+	if m.stats != nil {
+		m.stats.RecordSession()
+		m.stats.Save()
+	}
+
+	// Load project context
+	if m.projectContext != "" {
+		sb.WriteString("Project context: loaded from SYNTOR.md\n")
+	} else {
+		sb.WriteString("Project context: not found (create SYNTOR.md)\n")
+	}
+
+	// Show loaded skills
+	if m.skillManager != nil {
+		skillNames := m.skillManager.Names()
+		if len(skillNames) > 0 {
+			sb.WriteString(fmt.Sprintf("Skills loaded: %d (%s)\n", len(skillNames), strings.Join(skillNames, ", ")))
+			// Show always-active skills
+			alwaysActive := m.skillManager.GetAlwaysActive()
+			if len(alwaysActive) > 0 {
+				var activeNames []string
+				for _, s := range alwaysActive {
+					activeNames = append(activeNames, s.Name)
+				}
+				sb.WriteString(fmt.Sprintf("Always active: %s\n", strings.Join(activeNames, ", ")))
+			}
+		} else {
+			sb.WriteString("Skills loaded: 0\n")
+		}
+	}
+
+	// Show service connectivity
+	if m.services != nil {
+		sb.WriteString("\nServices:\n")
+		if m.services.HeraldAvailable {
+			sb.WriteString("  Herald: connected\n")
+		} else {
+			sb.WriteString("  Herald: not available\n")
+		}
+		if m.services.FalkorDBAvailable {
+			sb.WriteString("  FalkorDB: connected\n")
+		} else {
+			sb.WriteString("  FalkorDB: not available\n")
+		}
+		if m.services.MCPToolCount > 0 {
+			sb.WriteString(fmt.Sprintf("  MCP Tools: %d available\n", m.services.MCPToolCount))
+		}
+	}
+
+	// Show working directory
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", m.workingDir))
+	sb.WriteString("\nReady to assist!")
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleEndSession wraps up the session and saves state
+func (m Model) handleEndSession() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Session Summary ===\n\n")
+
+	// Calculate session duration
+	if !m.sessionStartTime.IsZero() {
+		duration := time.Since(m.sessionStartTime)
+		sb.WriteString(fmt.Sprintf("Duration: %s\n", duration.Round(time.Second)))
+	}
+
+	// Show message count
+	userMsgs := 0
+	assistantMsgs := 0
+	for _, msg := range m.messages {
+		switch msg.Role {
+		case "user":
+			userMsgs++
+		case "assistant":
+			assistantMsgs++
+		}
+	}
+	sb.WriteString(fmt.Sprintf("Messages: %d user, %d assistant\n", userMsgs, assistantMsgs))
+
+	// Show tool usage
+	if m.stats != nil {
+		today := m.stats.GetTodayStats()
+		sb.WriteString(fmt.Sprintf("Tool calls today: %d\n", today.Tools))
+	}
+
+	// Save stats
+	if m.stats != nil {
+		if err := m.stats.Save(); err != nil {
+			sb.WriteString(fmt.Sprintf("Warning: failed to save stats: %v\n", err))
+		} else {
+			sb.WriteString("Stats saved.\n")
+		}
+	}
+
+	// Create automatic checkpoint
+	home, _ := os.UserHomeDir()
+	checkpointDir := filepath.Join(home, ".syntor", "checkpoints")
+	storage, err := checkpoint.NewFileStorage(checkpointDir)
+	if err == nil {
+		cp := &checkpoint.Checkpoint{
+			ID:        fmt.Sprintf("session-%d", time.Now().Unix()),
+			SessionID: "tui-session",
+			CreatedAt: time.Now(),
+			Type:      checkpoint.TypeManual,
+			Metadata: map[string]string{
+				"type":           "session_end",
+				"working_dir":    m.workingDir,
+				"message_count":  fmt.Sprintf("%d", len(m.messages)),
+				"current_agent":  string(m.currentAgent),
+			},
+			Restorable: true,
+		}
+
+		ctx := context.Background()
+		if err := storage.Save(ctx, cp); err != nil {
+			sb.WriteString(fmt.Sprintf("Warning: failed to create checkpoint: %v\n", err))
+		} else {
+			sb.WriteString(fmt.Sprintf("Checkpoint saved: %s\n", cp.ID))
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("Warning: failed to initialize checkpoint storage: %v\n", err))
+	}
+
+	sb.WriteString("\nSession ended. Use /quit to exit or continue working.")
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleAgentsStatus shows the agent status dashboard
+func (m Model) handleAgentsStatus() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Agent Status Dashboard ===\n\n")
+
+	// Current agent
+	sb.WriteString(fmt.Sprintf("Current Agent: %s\n", getAgentDisplayName(m.currentAgent)))
+	sb.WriteString(fmt.Sprintf("Model: %s\n", m.registry.GetModelForAgent(m.currentAgent)))
+	sb.WriteString(fmt.Sprintf("Autonomy Mode: %s\n\n", map[AutonomyMode]string{AutoMode: "Auto", PlanMode: "Plan"}[m.autonomyMode]))
+
+	// Active handoffs
+	if len(m.activeHandoffs) > 0 {
+		sb.WriteString("Active Handoffs:\n")
+		for _, h := range m.activeHandoffs {
+			status := "executing"
+			if h.Status == coordination.HandoffCompleted {
+				status = "completed"
+			}
+			sb.WriteString(fmt.Sprintf("  %s -> %s: %s (%s)\n", h.FromAgent, h.ToAgent, h.Task, status))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("Active Handoffs: none\n\n")
+	}
+
+	// Available agents
+	sb.WriteString("Available Agents:\n")
+	agents := []struct {
+		name  string
+		desc  string
+		agent inference.AgentType
+	}{
+		{"sntr", "Primary orchestrator with tools", inference.AgentSNTR},
+		{"docs", "Documentation specialist", inference.AgentDocumentation},
+		{"git", "Git operations", inference.AgentGit},
+		{"worker", "General tasks", inference.AgentWorker},
+		{"code", "Code generation", inference.AgentWorkerCode},
+	}
+	for _, a := range agents {
+		indicator := "  "
+		if a.agent == m.currentAgent {
+			indicator = "> "
+		}
+		sb.WriteString(fmt.Sprintf("%s%-8s - %s\n", indicator, a.name, a.desc))
+	}
+
+	// Integration status
+	sb.WriteString("\nIntegrations:\n")
+	if m.services != nil {
+		if m.services.HeraldAvailable {
+			sb.WriteString("  Herald: connected\n")
+		} else {
+			sb.WriteString("  Herald: disconnected\n")
+		}
+		if m.services.FalkorDBAvailable {
+			sb.WriteString("  FalkorDB: connected\n")
+		} else {
+			sb.WriteString("  FalkorDB: disconnected\n")
+		}
+	}
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handlePlanMode enters or shows plan mode status
+func (m Model) handlePlanMode() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+
+	if m.autonomyMode == PlanMode {
+		sb.WriteString("Already in Plan mode.\n\n")
+		sb.WriteString("Plan mode behavior:\n")
+		sb.WriteString("- Agent proposes plans before execution\n")
+		sb.WriteString("- Tools require approval before running\n")
+		sb.WriteString("- Use Ctrl+Y to approve, Ctrl+N to reject\n")
+		sb.WriteString("\nUse Ctrl+A to switch to Auto mode.")
+	} else {
+		m.autonomyMode = PlanMode
+		sb.WriteString("Switched to Plan mode.\n\n")
+		sb.WriteString("In Plan mode:\n")
+		sb.WriteString("- Agent will propose plans before execution\n")
+		sb.WriteString("- Tools will require approval\n")
+		sb.WriteString("- Use Ctrl+Y to approve, Ctrl+N to reject")
+	}
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleCheckpoint creates a manual checkpoint
+func (m Model) handleCheckpoint() (tea.Model, tea.Cmd) {
+	home, _ := os.UserHomeDir()
+	checkpointDir := filepath.Join(home, ".syntor", "checkpoints")
+	storage, err := checkpoint.NewFileStorage(checkpointDir)
+	if err != nil {
+		m.addSystemMessage(fmt.Sprintf("Failed to initialize checkpoint storage: %v", err))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	cp := &checkpoint.Checkpoint{
+		ID:        fmt.Sprintf("manual-%d", time.Now().Unix()),
+		SessionID: "tui-session",
+		CreatedAt: time.Now(),
+		Type:      checkpoint.TypeManual,
+		Metadata: map[string]string{
+			"type":           "manual",
+			"working_dir":    m.workingDir,
+			"message_count":  fmt.Sprintf("%d", len(m.messages)),
+			"current_agent":  string(m.currentAgent),
+		},
+		Restorable: true,
+	}
+
+	ctx := context.Background()
+	if err := storage.Save(ctx, cp); err != nil {
+		m.addSystemMessage(fmt.Sprintf("Failed to create checkpoint: %v", err))
+	} else {
+		m.addSystemMessage(fmt.Sprintf("Checkpoint created: %s\nLocation: %s", cp.ID, checkpointDir))
+	}
+
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleSkillsList lists available skills
+func (m Model) handleSkillsList() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Available Skills ===\n\n")
+
+	if m.skillManager == nil || m.skillManager.Count() == 0 {
+		sb.WriteString("No skills loaded.\n")
+		sb.WriteString("\nTo add skills, create SKILL.md files in:\n")
+		home, _ := os.UserHomeDir()
+		sb.WriteString(fmt.Sprintf("  %s\n", filepath.Join(home, ".syntor", "skills", "<skill-name>", "SKILL.md")))
+	} else {
+		allSkills := m.skillManager.GetAll()
+		for _, skill := range allSkills {
+			status := ""
+			if skill.AlwaysActive {
+				status = " [always active]"
+			}
+			sb.WriteString(fmt.Sprintf("  %s%s\n", skill.Name, status))
+			if skill.Description != "" {
+				sb.WriteString(fmt.Sprintf("    %s\n", skill.Description))
+			}
+			if len(skill.Triggers) > 0 {
+				sb.WriteString(fmt.Sprintf("    Triggers: %s\n", strings.Join(skill.Triggers, ", ")))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
 // buildDynamicPrompt builds a system prompt using the manifest-based prompt builder
 // Falls back to static prompts if the builder isn't available
 func (m *Model) buildDynamicPrompt(agentType inference.AgentType) string {
+	var basePrompt string
+
 	// Try to use the dynamic prompt builder
 	if m.promptBuilder != nil && m.manifestStore != nil {
 		agentName := agentTypeToManifestName(agentType)
@@ -1522,13 +1905,48 @@ func (m *Model) buildDynamicPrompt(agentType inference.AgentType) string {
 				PlanMode:       m.autonomyMode == PlanMode,
 			})
 			if err == nil && systemPrompt != "" {
-				return systemPrompt
+				basePrompt = systemPrompt
 			}
 		}
 	}
 
-	// Fall back to static prompt
-	return getSystemPrompt(agentType)
+	// Fall back to static prompt if no dynamic prompt
+	if basePrompt == "" {
+		basePrompt = getSystemPrompt(agentType)
+	}
+
+	// Append project context from SYNTOR.md if available
+	if m.projectContext != "" {
+		basePrompt = basePrompt + "\n\n---\n\n" + m.projectContext
+	}
+
+	// Inject always-active skills
+	if m.skillManager != nil {
+		activeSkills := m.skillManager.GetAlwaysActive()
+		if len(activeSkills) > 0 {
+			skillsContent := skills.InjectAll(activeSkills)
+			basePrompt = basePrompt + "\n\n" + skillsContent
+		}
+	}
+
+	// Add integration context if services are available
+	if m.services != nil {
+		var integrationInfo []string
+		if m.services.HeraldAvailable {
+			integrationInfo = append(integrationInfo, "Herald session manager: connected")
+		}
+		if m.services.FalkorDBAvailable {
+			integrationInfo = append(integrationInfo, "FalkorDB agent routing: connected")
+		}
+		if m.services.MCPToolCount > 0 {
+			integrationInfo = append(integrationInfo, fmt.Sprintf("MCP tools available: %d", m.services.MCPToolCount))
+		}
+		if len(integrationInfo) > 0 {
+			basePrompt = basePrompt + "\n\n## Connected Services\n- " + strings.Join(integrationInfo, "\n- ")
+		}
+	}
+
+	return basePrompt
 }
 
 // agentTypeToManifestName converts an AgentType to the manifest name
