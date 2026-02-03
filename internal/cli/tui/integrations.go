@@ -7,12 +7,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"syntor/pkg/checkpoint"
-	"syntor/pkg/falkordb"
-	"syntor/pkg/herald"
-	"syntor/pkg/hooks"
-	"syntor/pkg/mcp"
-	"syntor/pkg/subagent"
+	"github.com/syntor/syntor/pkg/checkpoint"
+	"github.com/syntor/syntor/pkg/falkordb"
+	"github.com/syntor/syntor/pkg/herald"
+	"github.com/syntor/syntor/pkg/hooks"
+	"github.com/syntor/syntor/pkg/mcp"
+	"github.com/syntor/syntor/pkg/subagent"
 )
 
 // IntegratedServices holds all the new service integrations.

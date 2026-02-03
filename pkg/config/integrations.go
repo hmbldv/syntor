@@ -3,12 +3,12 @@ package config
 import (
 	"time"
 
-	"syntor/pkg/checkpoint"
-	"syntor/pkg/falkordb"
-	"syntor/pkg/herald"
-	"syntor/pkg/hooks"
-	"syntor/pkg/mcp"
-	"syntor/pkg/subagent"
+	"github.com/syntor/syntor/pkg/checkpoint"
+	"github.com/syntor/syntor/pkg/falkordb"
+	"github.com/syntor/syntor/pkg/herald"
+	"github.com/syntor/syntor/pkg/hooks"
+	"github.com/syntor/syntor/pkg/mcp"
+	"github.com/syntor/syntor/pkg/subagent"
 )
 
 // IntegrationsConfig holds configuration for all external integrations.
@@ -178,13 +178,13 @@ func (c *SubAgentConfig) ToSubAgentConfig() subagent.Config {
 
 // SystemsConfig holds cross-system configuration.
 type SystemsConfig struct {
-	Sage  SystemConfig `yaml:"sage" json:"sage"`
-	Forge SystemConfig `yaml:"forge" json:"forge"`
-	Pali  SystemConfig `yaml:"pali" json:"pali"`
+	Sage  HostSystemConfig `yaml:"sage" json:"sage"`
+	Forge HostSystemConfig `yaml:"forge" json:"forge"`
+	Pali  HostSystemConfig `yaml:"pali" json:"pali"`
 }
 
-// SystemConfig describes a single system.
-type SystemConfig struct {
+// HostSystemConfig describes a single host system (Sage, Forge, Pali).
+type HostSystemConfig struct {
 	Host     string `yaml:"host" json:"host"`
 	SSHAlias string `yaml:"ssh_alias" json:"ssh_alias"`
 	Type     string `yaml:"type" json:"type"` // mac, linux, kali
@@ -251,18 +251,18 @@ func DefaultIntegrationsConfig() IntegrationsConfig {
 			PromotionThreshold: 5,
 		},
 		Systems: SystemsConfig{
-			Sage: SystemConfig{
+			Sage: HostSystemConfig{
 				Host:    "localhost",
 				Type:    "mac",
 				Enabled: true,
 			},
-			Forge: SystemConfig{
+			Forge: HostSystemConfig{
 				Host:     "192.168.1.61",
 				SSHAlias: "lnx-rig",
 				Type:     "linux",
 				Enabled:  true,
 			},
-			Pali: SystemConfig{
+			Pali: HostSystemConfig{
 				Host:     "10.211.55.9",
 				SSHAlias: "pali",
 				Type:     "kali",

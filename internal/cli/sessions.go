@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"syntor/pkg/herald"
+	"github.com/syntor/syntor/pkg/herald"
 )
 
 var (

@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
 
-	"syntor/pkg/inference"
+	"github.com/syntor/syntor/pkg/inference"
 )
 
 // Provider implements inference.Provider using Herald as the backend.

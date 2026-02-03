@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"syntor/pkg/checkpoint"
+	"github.com/syntor/syntor/pkg/checkpoint"
 )
 
 // checkpointsCmd is the parent command for checkpoint management
