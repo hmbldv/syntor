@@ -76,6 +76,17 @@ type Styles struct {
 	// Separators
 	InputSeparator lipgloss.Style
 
+	// Handoff visualization styles
+	HandoffBar       lipgloss.Style
+	HandoffAgent     lipgloss.Style
+	HandoffArrow     lipgloss.Style
+	HandoffTask      lipgloss.Style
+
+	// Tool activity styles
+	ToolActivityBar  lipgloss.Style
+	ToolName         lipgloss.Style
+	ToolOperation    lipgloss.Style
+
 	// General
 	Error   lipgloss.Style
 	Success lipgloss.Style
@@ -218,6 +229,38 @@ func DefaultStyles() Styles {
 		// Separators
 		InputSeparator: lipgloss.NewStyle().
 			Foreground(secondaryColor),
+
+		// Handoff visualization
+		HandoffBar: lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Background(bgSecondary).
+			Padding(0, 1),
+
+		HandoffAgent: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(accentColor),
+
+		HandoffArrow: lipgloss.NewStyle().
+			Foreground(primaryColor).
+			Bold(true),
+
+		HandoffTask: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#d1d5db")).
+			Italic(true),
+
+		// Tool activity
+		ToolActivityBar: lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Background(bgSecondary).
+			Padding(0, 1),
+
+		ToolName: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(accentColor),
+
+		ToolOperation: lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Italic(true),
 
 		// General
 		Error: lipgloss.NewStyle().
