@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/syntor/syntor/internal/cli/tui"
 	"github.com/syntor/syntor/pkg/config"
-	"github.com/syntor/syntor/pkg/inference"
 )
 
 var (
@@ -30,19 +29,21 @@ var rootCmd = &cobra.Command{
 	Use:   "syntor",
 	Short: "SYNTOR - Multi-Agent AI System",
 	Long: `SYNTOR is a multi-agent AI orchestration system that coordinates
-specialized agents for documentation, git operations, and general tasks.
+specialized agents loaded from the agent database.
 
 Start an interactive session:
   syntor
 
 Run a specific agent:
-  syntor coordination "analyze the codebase"
-  syntor docs "generate documentation"
-  syntor git "create a commit message"
+  syntor run sntr "analyze the codebase"
+  syntor run coder "write a function"
+  syntor run paladin "review security"
+
+List available agents:
+  syntor agents list
 
 Manage models:
   syntor models list
-  syntor models pull mistral:7b
   syntor models status`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Load configuration with secrets resolution
@@ -84,11 +85,9 @@ func init() {
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(initCmd)
 
-	// Agent commands
-	rootCmd.AddCommand(coordinationCmd)
-	rootCmd.AddCommand(docsCmd)
-	rootCmd.AddCommand(gitAgentCmd)
-	rootCmd.AddCommand(workerCmd)
+	// Agent commands (dynamic from database)
+	rootCmd.AddCommand(agentsCmd)
+	rootCmd.AddCommand(runCmd)
 }
 
 // versionCmd shows version information
@@ -151,8 +150,8 @@ func runInteractive() error {
 }
 
 func sendMessage(message string) error {
-	// Use coordination agent by default for single messages
-	return runAgent(inference.AgentCoordination, message)
+	// Use SNTR agent by default for single messages
+	return runAgentByName("sntr", message)
 }
 
 func runSetupWizard() error {

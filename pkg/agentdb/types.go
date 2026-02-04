@@ -139,6 +139,7 @@ type AgentSummary struct {
 	Name         string   `json:"name" db:"name"`
 	Role         string   `json:"role" db:"role"`
 	Team         string   `json:"team" db:"team"`
+	Model        string   `json:"model" db:"model"`
 	TaskTypes    []string `json:"task_types" db:"task_types"`
 	Capabilities []string `json:"capabilities" db:"capabilities"`
 	Version      int      `json:"version" db:"version"`
