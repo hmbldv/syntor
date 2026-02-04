@@ -102,8 +102,8 @@ func listModels() error {
 		return fmt.Errorf("failed to initialize inference: %w", err)
 	}
 
-	// Get all available models
-	allModels := registry.GetAvailableModels()
+	// Get all available models (including from Ollama)
+	allModels := registry.GetAvailableModelsWithContext(ctx)
 
 	// Check which models are installed (for Ollama)
 	ollamaProvider, hasOllama := registry.GetProvider("ollama")
@@ -161,10 +161,15 @@ func pullModel(modelID string) error {
 		return fmt.Errorf("failed to initialize inference: %w", err)
 	}
 
-	// Find the model
+	// Find the model - check static list first, then assume Ollama for unknown models
 	model, found := registry.FindModel(modelID)
 	if !found {
-		return fmt.Errorf("model not found: %s", modelID)
+		// Unknown model - assume it's an Ollama model that can be pulled
+		model = inference.Model{
+			ID:       modelID,
+			Name:     modelID,
+			Provider: "ollama",
+		}
 	}
 
 	if model.Provider != "ollama" {
@@ -249,7 +254,7 @@ func showModelStatus() error {
 	}
 
 	for agentType, modelID := range assignments {
-		providerName, _ := registry.GetProviderForModel(modelID)
+		providerName, _ := registry.GetProviderForModelWithContext(ctx, modelID)
 		status := "unknown"
 
 		if providerName == "ollama" {
@@ -260,7 +265,7 @@ func showModelStatus() error {
 			} else {
 				status = "not pulled"
 			}
-		} else {
+		} else if providerName != "" {
 			// API providers
 			status = "api"
 		}

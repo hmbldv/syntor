@@ -286,9 +286,38 @@ func (r *Registry) ResetAssignments() {
 	r.modelAssignments = copyAssignments(DefaultModelAssignments)
 }
 
-// GetAvailableModels returns all available models
+// GetAvailableModels returns all available models (static list only)
+// For a complete list including Ollama models, use GetAvailableModelsWithContext
 func (r *Registry) GetAvailableModels() []Model {
 	return AvailableModels
+}
+
+// GetAvailableModelsWithContext returns all models, including those from Ollama
+func (r *Registry) GetAvailableModelsWithContext(ctx context.Context) []Model {
+	// Start with static models (API providers)
+	modelMap := make(map[string]Model)
+	for _, m := range AvailableModels {
+		modelMap[m.ID] = m
+	}
+
+	// Fetch models from Ollama and merge
+	if ollamaProvider, ok := r.GetProvider("ollama"); ok && ollamaProvider.IsAvailable(ctx) {
+		if ollamaModels, err := ollamaProvider.ListModels(ctx); err == nil {
+			for _, m := range ollamaModels {
+				if _, exists := modelMap[m.ID]; !exists {
+					// Add Ollama model not in static list
+					modelMap[m.ID] = m
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]Model, 0, len(modelMap))
+	for _, m := range modelMap {
+		result = append(result, m)
+	}
+	return result
 }
 
 // GetModelsByProvider returns models for a specific provider
@@ -318,7 +347,7 @@ func (r *Registry) GetAPIModels() []Model {
 	return models
 }
 
-// FindModel finds a model by ID
+// FindModel finds a model by ID in the static list
 func (r *Registry) FindModel(modelID string) (Model, bool) {
 	for _, m := range AvailableModels {
 		if m.ID == modelID {
@@ -328,9 +357,43 @@ func (r *Registry) FindModel(modelID string) (Model, bool) {
 	return Model{}, false
 }
 
+// FindModelWithContext finds a model by ID, checking Ollama if not in static list
+func (r *Registry) FindModelWithContext(ctx context.Context, modelID string) (Model, bool) {
+	// Check static list first
+	if m, found := r.FindModel(modelID); found {
+		return m, true
+	}
+
+	// Check Ollama for the model
+	if ollamaProvider, ok := r.GetProvider("ollama"); ok && ollamaProvider.IsAvailable(ctx) {
+		if hasModel, _ := ollamaProvider.HasModel(ctx, modelID); hasModel {
+			// Return a basic model struct for Ollama models not in static list
+			return Model{
+				ID:           modelID,
+				Name:         modelID,
+				Provider:     "ollama",
+				Description:  "Ollama model",
+				Capabilities: []string{"chat", "completion"},
+			}, true
+		}
+	}
+
+	return Model{}, false
+}
+
 // GetProviderForModel returns the provider name for a model
 func (r *Registry) GetProviderForModel(modelID string) (string, bool) {
 	model, found := r.FindModel(modelID)
+	if !found {
+		// Assume ollama for unknown models (will be validated at runtime)
+		return "ollama", true
+	}
+	return model.Provider, true
+}
+
+// GetProviderForModelWithContext returns the provider name, checking Ollama for unknown models
+func (r *Registry) GetProviderForModelWithContext(ctx context.Context, modelID string) (string, bool) {
+	model, found := r.FindModelWithContext(ctx, modelID)
 	if !found {
 		return "", false
 	}
