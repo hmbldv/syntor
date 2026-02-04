@@ -92,31 +92,16 @@ func (r *REPL) registerBuiltinCommands() {
 		Handler:     (*REPL).cmdConfig,
 	}
 
-	// Agent switching commands
-	r.slashCmds["coordination"] = SlashCommand{
-		Name:        "coordination",
-		Description: "Switch to coordination agent",
-		Handler:     (*REPL).cmdCoordination,
+	// Dynamic agent command
+	r.slashCmds["agent"] = SlashCommand{
+		Name:        "agent",
+		Description: "Switch to any agent: /agent <name> [message]",
+		Handler:     (*REPL).cmdAgent,
 	}
-	r.slashCmds["docs"] = SlashCommand{
-		Name:        "docs",
-		Description: "Switch to documentation agent",
-		Handler:     (*REPL).cmdDocs,
-	}
-	r.slashCmds["git"] = SlashCommand{
-		Name:        "git",
-		Description: "Switch to git agent",
-		Handler:     (*REPL).cmdGit,
-	}
-	r.slashCmds["worker"] = SlashCommand{
-		Name:        "worker",
-		Description: "Switch to worker agent",
-		Handler:     (*REPL).cmdWorker,
-	}
-	r.slashCmds["code"] = SlashCommand{
-		Name:        "code",
-		Description: "Switch to code worker agent",
-		Handler:     (*REPL).cmdCode,
+	r.slashCmds["agents"] = SlashCommand{
+		Name:        "agents",
+		Description: "List all available agents",
+		Handler:     (*REPL).cmdAgentsList,
 	}
 }
 
@@ -226,7 +211,13 @@ func (r *REPL) handleSlashCommand(input string) error {
 		return cmd.Handler(r, args)
 	}
 
-	return fmt.Errorf("unknown command: /%s. Type /help for available commands", cmdName)
+	// Try dynamic agent switch - treat unknown commands as potential agent names
+	r.currentAgent = inference.AgentType(cmdName)
+	fmt.Printf("Switched to %s agent\n", cmdName)
+	if args != "" {
+		return r.sendMessage(args)
+	}
+	return nil
 }
 
 // sendMessage sends a message to the current agent
@@ -296,11 +287,9 @@ func (r *REPL) cmdHelp(args string) error {
 	fmt.Println("\n=== SYNTOR Commands ===")
 	fmt.Println()
 	fmt.Println("Agent Commands:")
-	fmt.Println("  /coordination  - Switch to coordination agent")
-	fmt.Println("  /docs          - Switch to documentation agent")
-	fmt.Println("  /git           - Switch to git agent")
-	fmt.Println("  /worker        - Switch to general worker agent")
-	fmt.Println("  /code          - Switch to code worker agent")
+	fmt.Println("  /agent [name]  - List agents or switch to <name>")
+	fmt.Println("  /agents        - List all available agents")
+	fmt.Println("  /<name>        - Direct switch (e.g. /coder, /paladin)")
 	fmt.Println()
 	fmt.Println("System Commands:")
 	fmt.Println("  /help          - Show this help")
@@ -372,65 +361,73 @@ func (r *REPL) cmdConfig(args string) error {
 	return nil
 }
 
-func (r *REPL) cmdCoordination(args string) error {
-	r.currentAgent = inference.AgentCoordination
-	fmt.Println("Switched to coordination agent")
-	if args != "" {
-		return r.sendMessage(args)
+func (r *REPL) cmdAgent(args string) error {
+	if args == "" {
+		return r.cmdAgentsList("")
+	}
+
+	// Parse agent name and optional message
+	parts := strings.SplitN(args, " ", 2)
+	agentName := strings.ToLower(parts[0])
+	message := ""
+	if len(parts) > 1 {
+		message = parts[1]
+	}
+
+	// Switch to the agent (AgentType is just a string alias)
+	r.currentAgent = inference.AgentType(agentName)
+	fmt.Printf("Switched to %s agent\n", agentName)
+
+	if message != "" {
+		return r.sendMessage(message)
 	}
 	return nil
 }
 
-func (r *REPL) cmdDocs(args string) error {
-	r.currentAgent = inference.AgentDocumentation
-	fmt.Println("Switched to documentation agent")
-	if args != "" {
-		return r.sendMessage(args)
-	}
-	return nil
-}
+func (r *REPL) cmdAgentsList(args string) error {
+	fmt.Println("\n=== Available Agents ===")
+	fmt.Println("Usage: /agent <name> [message]")
+	fmt.Println("   or: /<name> [message]")
+	fmt.Println()
 
-func (r *REPL) cmdGit(args string) error {
-	r.currentAgent = inference.AgentGit
-	fmt.Println("Switched to git agent")
-	if args != "" {
-		return r.sendMessage(args)
+	// Load agents from database
+	loader, err := getAgentLoader()
+	if err != nil {
+		fmt.Println("  (Agent database not available)")
+		fmt.Println("\n  Common agents:")
+		fmt.Println("    sntr      - Primary orchestrator")
+		fmt.Println("    coder     - Development partner")
+		fmt.Println("    paladin   - Security specialist")
+		fmt.Println()
+		return nil
 	}
-	return nil
-}
+	defer loader.Close()
 
-func (r *REPL) cmdWorker(args string) error {
-	r.currentAgent = inference.AgentWorker
-	fmt.Println("Switched to worker agent")
-	if args != "" {
-		return r.sendMessage(args)
-	}
-	return nil
-}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-func (r *REPL) cmdCode(args string) error {
-	r.currentAgent = inference.AgentWorkerCode
-	fmt.Println("Switched to code worker agent")
-	if args != "" {
-		return r.sendMessage(args)
+	agents, err := loader.ListAgents(ctx)
+	if err != nil {
+		fmt.Printf("Error listing agents: %v\n", err)
+		return nil
 	}
+
+	for _, agent := range agents {
+		model := agent.Model
+		if model == "" {
+			model = "default"
+		}
+		fmt.Printf("  %-15s %-35s %s\n", agent.Name, agent.Role, model)
+	}
+	fmt.Printf("\nTotal: %d agents\n\n", len(agents))
 	return nil
 }
 
 // getAgentName returns a display name for an agent type
 func getAgentName(t inference.AgentType) string {
-	switch t {
-	case inference.AgentCoordination:
-		return "coordination"
-	case inference.AgentDocumentation:
-		return "docs"
-	case inference.AgentGit:
-		return "git"
-	case inference.AgentWorker:
-		return "worker"
-	case inference.AgentWorkerCode:
-		return "code"
-	default:
-		return "syntor"
+	name := string(t)
+	if name == "" {
+		return "sntr"
 	}
+	return name
 }
