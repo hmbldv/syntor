@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/syntor/syntor/pkg/agentdb"
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/inference/anthropic"
@@ -102,4 +103,59 @@ func GetProviderForAgent(registry *inference.Registry, agentType inference.Agent
 	}
 
 	return provider, modelID, nil
+}
+
+// SetupDynamicResolver configures the registry to resolve models from agentdb
+func SetupDynamicResolver(registry *inference.Registry, agentLoader *agentdb.UnifiedLoader) {
+	if agentLoader == nil {
+		return
+	}
+
+	registry.SetDynamicResolver(func(ctx context.Context, agentName string) (string, error) {
+		model, err := agentLoader.GetModelForAgent(ctx, agentName)
+		if err != nil {
+			return "", err
+		}
+		return model, nil
+	})
+}
+
+// InitializeInferenceWithAgentDB creates a registry with dynamic agent resolution
+func InitializeInferenceWithAgentDB(cfg *config.InferenceConfig, agentCfg *config.AgentDBConfig) (*inference.Registry, *agentdb.UnifiedLoader, error) {
+	// Create base registry
+	registry, err := InitializeInference(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// If agentdb is not configured or disabled, return without dynamic resolver
+	if agentCfg == nil || !agentCfg.Enabled {
+		return registry, nil, nil
+	}
+
+	// Create agentdb loader
+	loaderCfg := agentdb.UnifiedLoaderConfig{
+		AgentDBConfig: &agentdb.Config{
+			Host:     agentCfg.Host,
+			Port:     agentCfg.Port,
+			Database: agentCfg.Database,
+			Schema:   agentCfg.Schema,
+			User:     agentCfg.User,
+			Password: agentCfg.Password,
+			SSLMode:  agentCfg.SSLMode,
+			CacheTTL: agentCfg.CacheTTL,
+		},
+		PreferDatabase: agentCfg.PreferDatabase,
+	}
+
+	loader, err := agentdb.NewUnifiedLoader(loaderCfg)
+	if err != nil {
+		// Non-fatal: continue without dynamic resolver
+		return registry, nil, nil
+	}
+
+	// Set up dynamic resolver
+	SetupDynamicResolver(registry, loader)
+
+	return registry, loader, nil
 }

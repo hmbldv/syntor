@@ -86,10 +86,17 @@ func (c *cache) clear() {
 
 // NewClient creates a new agentdb client
 func NewClient(cfg Config) (*Client, error) {
+	// Build connection string, handling empty password
 	connStr := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Database, cfg.SSLMode,
+		"host=%s port=%d dbname=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.Database, cfg.SSLMode,
 	)
+	if cfg.User != "" {
+		connStr += fmt.Sprintf(" user=%s", cfg.User)
+	}
+	if cfg.Password != "" {
+		connStr += fmt.Sprintf(" password=%s", cfg.Password)
+	}
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
