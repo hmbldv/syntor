@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/syntor/syntor/pkg/agentdb"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/setup"
 )
@@ -125,6 +126,11 @@ func init() {
 
 // runAgent executes a message with the specified agent type
 func runAgent(agentType inference.AgentType, message string) error {
+	return runAgentByName(string(agentType), message)
+}
+
+// runAgentByName executes a message with an agent loaded dynamically from databases
+func runAgentByName(agentName string, message string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -134,15 +140,51 @@ func runAgent(agentType inference.AgentType, message string) error {
 		return fmt.Errorf("failed to initialize inference: %w", err)
 	}
 
-	// Get provider and model for this agent
-	provider, modelID, err := setup.GetProviderForAgent(registry, agentType)
-	if err != nil {
-		return fmt.Errorf("failed to get provider: %w", err)
+	// Try to initialize agentdb loader for dynamic resolution
+	var agentLoader *agentdb.UnifiedLoader
+	var loadedAgent *agentdb.LoadedAgent
+
+	if syntorConfig.Integrations.AgentDB.Enabled {
+		loaderCfg := agentdb.UnifiedLoaderConfig{
+			AgentDBConfig:  &agentdb.Config{
+				Host:     syntorConfig.Integrations.AgentDB.Host,
+				Port:     syntorConfig.Integrations.AgentDB.Port,
+				Database: syntorConfig.Integrations.AgentDB.Database,
+				Schema:   syntorConfig.Integrations.AgentDB.Schema,
+				SSLMode:  syntorConfig.Integrations.AgentDB.SSLMode,
+				CacheTTL: syntorConfig.Integrations.AgentDB.CacheTTL,
+			},
+			PreferDatabase: syntorConfig.Integrations.AgentDB.PreferDatabase,
+		}
+		if loader, err := agentdb.NewUnifiedLoader(loaderCfg); err == nil {
+			agentLoader = loader
+			defer loader.Close()
+
+			// Load agent definition
+			if loaded, err := loader.LoadAgent(ctx, agentName); err == nil {
+				loadedAgent = loaded
+			}
+		}
+	}
+
+	// Determine model - prefer database, fall back to static
+	var modelID string
+	if loadedAgent != nil && loadedAgent.GetModel() != "" {
+		modelID = loadedAgent.GetModel()
+	} else {
+		// Fall back to static registry
+		modelID = registry.GetModelForAgent(inference.AgentType(agentName))
 	}
 
 	// Allow model override from flag
 	if agentModel != "" {
 		modelID = agentModel
+	}
+
+	// Get provider for model
+	provider, _, err := setup.GetProviderForAgent(registry, inference.AgentType(agentName))
+	if err != nil {
+		return fmt.Errorf("failed to get provider: %w", err)
 	}
 
 	// Check provider availability
@@ -174,7 +216,7 @@ func runAgent(agentType inference.AgentType, message string) error {
 	}
 
 	if verbose {
-		fmt.Printf("Using %s with model %s\n", provider.Name(), modelID)
+		fmt.Printf("Using %s with model %s (agent: %s)\n", provider.Name(), modelID, agentName)
 	}
 
 	// Build the request
@@ -188,8 +230,15 @@ func runAgent(agentType inference.AgentType, message string) error {
 		},
 	}
 
-	// Add system prompt based on agent type
-	req.System = getSystemPrompt(agentType)
+	// Get system prompt - prefer database, fall back to static
+	if loadedAgent != nil && loadedAgent.SystemPrompt != "" {
+		req.System = loadedAgent.SystemPrompt
+		if verbose {
+			fmt.Printf("Using system prompt from database (version %d)\n", loadedAgent.Version)
+		}
+	} else {
+		req.System = getSystemPrompt(inference.AgentType(agentName))
+	}
 
 	// Use streaming if configured
 	if syntorConfig.CLI.StreamResponse {
@@ -209,6 +258,7 @@ func runAgent(agentType inference.AgentType, message string) error {
 			resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
 	}
 
+	_ = agentLoader // Silence unused variable warning if loader was created
 	return nil
 }
 
@@ -240,56 +290,74 @@ func streamChat(ctx context.Context, provider inference.Provider, req inference.
 	return nil
 }
 
-// getSystemPrompt returns the system prompt for an agent type
+// getSystemPrompt returns the fallback system prompt for an agent type
+// DEPRECATED: Prefer database-loaded system prompts from agentdb
+// This is only used when the database is unavailable or agent not found
 func getSystemPrompt(agentType inference.AgentType) string {
+	// Check for known legacy agent types
 	switch agentType {
-	case inference.AgentCoordination:
-		return `You are SYNTOR's coordination agent. You analyze tasks and create plans
-to accomplish complex objectives. You coordinate with other specialized agents
-(documentation, git, worker) to complete tasks efficiently.
+	case inference.AgentSNTR: // Also matches AgentCoordination (same value)
+		return `You are SNTR, the primary AI orchestration agent for SYNTOR.
 
-When given a task:
-1. Analyze what needs to be done
-2. Break it into steps if needed
-3. Identify which agents should handle each step
-4. Provide a clear action plan`
+## Your Role
+You coordinate multi-agent workflows and route tasks to specialized agents.
+
+## Guidelines
+- Analyze tasks and break them into steps
+- Route to appropriate specialized agents
+- Provide clear, actionable responses`
 
 	case inference.AgentDocumentation:
-		return `You are SYNTOR's documentation agent. You specialize in:
-- Analyzing code structure and patterns
-- Generating clear documentation
-- Creating README files and API documentation
-- Explaining complex code in simple terms
+		return `You are a documentation specialist agent.
 
-Provide thorough, well-structured documentation that helps developers understand the code.`
+## Your Role
+You create clear, comprehensive documentation from code.
+
+## Guidelines
+- Analyze code structure and patterns
+- Generate well-structured documentation
+- Explain complex concepts simply`
 
 	case inference.AgentGit:
-		return `You are SYNTOR's git agent. You specialize in:
-- Creating clear, conventional commit messages
-- Analyzing git history and changes
-- Managing branches and releases
-- Code review and change analysis
+		return `You are a git operations specialist agent.
 
-Follow conventional commit format (feat:, fix:, docs:, etc.) when creating commit messages.`
+## Your Role
+You handle git operations and create conventional commit messages.
+
+## Guidelines
+- Use conventional commit format (feat:, fix:, docs:, etc.)
+- Analyze changes before committing
+- Follow git best practices`
 
 	case inference.AgentWorker:
-		return `You are SYNTOR's worker agent. You handle general tasks including:
-- Answering questions about code
-- Summarizing files and content
-- General programming assistance
+		return `You are a general worker agent.
 
-Be concise and helpful in your responses.`
+## Your Role
+You handle general tasks and assist with various requests.
+
+## Guidelines
+- Be concise and helpful
+- Ask clarifying questions when needed`
 
 	case inference.AgentWorkerCode:
-		return `You are SYNTOR's code worker agent. You specialize in:
-- Writing and reviewing code
-- Refactoring and optimization
-- Bug fixing and debugging
-- Code generation and completion
+		return `You are a code specialist worker agent.
 
-Provide clean, well-structured code with clear explanations.`
+## Your Role
+You write, review, and refactor code.
+
+## Guidelines
+- Write clean, well-structured code
+- Follow best practices for the language
+- Explain your code clearly`
 
 	default:
-		return "You are a helpful AI assistant."
+		// For dynamic agents not in the legacy constants,
+		// return a generic prompt that includes their name
+		return fmt.Sprintf(`You are the %s agent in the SYNTOR multi-agent system.
+
+## Guidelines
+- Be helpful and professional
+- Complete the requested task thoroughly
+- Ask clarifying questions if needed`, string(agentType))
 	}
 }

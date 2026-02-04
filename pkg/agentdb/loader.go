@@ -167,6 +167,7 @@ func (l *UnifiedLoader) RouteAndLoad(ctx context.Context, taskType string) (*Loa
 		loaded.Personality = richDef.Personality
 		loaded.Behavior = richDef.BehavioralRules
 		loaded.Interactions = richDef.InteractionProtocols
+		loaded.ModelConfig = richDef.ModelConfig
 		loaded.Source = "database"
 		loaded.Version = richDef.Version
 	} else if manifestDef != nil {
@@ -217,6 +218,7 @@ func (l *UnifiedLoader) LoadAgent(ctx context.Context, agentID string) (*LoadedA
 			loaded.Personality = def.Personality
 			loaded.Behavior = def.BehavioralRules
 			loaded.Interactions = def.InteractionProtocols
+			loaded.ModelConfig = def.ModelConfig
 			loaded.Source = "database"
 			loaded.Version = def.Version
 			return loaded, nil
@@ -327,6 +329,25 @@ func (l *UnifiedLoader) GetSelfContext(ctx context.Context, agentID string) (*pr
 	return self, nil
 }
 
+// GetModelForAgent returns the model assigned to an agent
+// Returns empty string if no specific model is configured
+func (l *UnifiedLoader) GetModelForAgent(ctx context.Context, agentID string) (string, error) {
+	loaded, err := l.LoadAgent(ctx, agentID)
+	if err != nil {
+		return "", err
+	}
+	return loaded.GetModel(), nil
+}
+
+// GetAgentConfig returns model and system prompt for an agent
+func (l *UnifiedLoader) GetAgentConfig(ctx context.Context, agentID string) (model string, systemPrompt string, err error) {
+	loaded, err := l.LoadAgent(ctx, agentID)
+	if err != nil {
+		return "", "", err
+	}
+	return loaded.GetModel(), loaded.SystemPrompt, nil
+}
+
 // IsAgentDBAvailable returns true if AgentDB is connected
 func (l *UnifiedLoader) IsAgentDBAvailable() bool {
 	l.mu.RLock()
@@ -348,6 +369,7 @@ type LoadedAgent struct {
 	Personality  *Personality
 	Behavior     *BehavioralRules
 	Interactions *InteractionProtocols
+	ModelConfig  *ModelConfig
 	RouteInfo    *RouteInfo
 	Source       string // "database" or "manifest"
 	Version      int
@@ -376,3 +398,20 @@ func (a *LoadedAgent) GetStyle() string {
 	}
 	return "clear and concise"
 }
+
+// GetModel returns the configured model for this agent
+func (a *LoadedAgent) GetModel() string {
+	if a.ModelConfig != nil && a.ModelConfig.DefaultModel != "" {
+		return a.ModelConfig.DefaultModel
+	}
+	return "" // Caller should use fallback
+}
+
+// GetModelFallbacks returns fallback models for this agent
+func (a *LoadedAgent) GetModelFallbacks() []string {
+	if a.ModelConfig != nil {
+		return a.ModelConfig.Fallbacks
+	}
+	return nil
+}
+

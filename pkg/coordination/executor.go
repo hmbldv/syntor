@@ -98,18 +98,8 @@ func (e *Executor) Execute(ctx context.Context, intent *HandoffIntent) (*Handoff
 		systemPrompt = agentManifest.Spec.Prompt.System
 	}
 
-	// Get model for target agent - try FalkorDB first, fall back to static registry
-	var modelID string
-	if e.falkorDB != nil && e.falkorDB.IsConnected() {
-		if model, err := e.falkorDB.GetAgentModel(execCtx, intent.Target); err == nil && model != "" {
-			modelID = model
-		}
-	}
-	// Fall back to static registry if FalkorDB lookup failed
-	if modelID == "" {
-		agentType := e.mapAgentType(intent.Target)
-		modelID = e.registry.GetModelForAgent(agentType)
-	}
+	// Get model for target agent - uses dynamic resolver (database) with static fallback
+	modelID := e.registry.GetModelForAgentDynamic(execCtx, intent.Target)
 
 	// Get provider for model
 	providerName, found := e.registry.GetProviderForModel(modelID)
@@ -339,22 +329,10 @@ func (e *Executor) failHandoff(status *HandoffStatus, err error) (*HandoffResult
 	return result, err
 }
 
-// mapAgentType maps agent name to inference AgentType
+// mapAgentType is DEPRECATED - agents are now resolved dynamically from databases
+// Kept for backward compatibility during migration
 func (e *Executor) mapAgentType(agentName string) inference.AgentType {
-	switch agentName {
-	case "sntr", "coordination":
-		return inference.AgentSNTR
-	case "docs", "documentation":
-		return inference.AgentDocumentation
-	case "git":
-		return inference.AgentGit
-	case "worker":
-		return inference.AgentWorker
-	case "code", "worker_code":
-		return inference.AgentWorkerCode
-	default:
-		return inference.AgentWorker // Default to worker
-	}
+	return inference.AgentType(agentName)
 }
 
 // formatTaskMessage formats the task for the target agent

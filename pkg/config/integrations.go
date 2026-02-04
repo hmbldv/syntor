@@ -70,15 +70,16 @@ func (c *FalkorDBConfig) ToFalkorDBConfig() falkordb.Config {
 
 // AgentDBConfig holds PostgreSQL agent database configuration.
 type AgentDBConfig struct {
-	Enabled  bool          `yaml:"enabled" json:"enabled"`
-	Host     string        `yaml:"host" json:"host"`
-	Port     int           `yaml:"port" json:"port"`
-	Database string        `yaml:"database" json:"database"`
-	Schema   string        `yaml:"schema" json:"schema"`
-	User     string        `yaml:"user" json:"user"`
-	Password string        `yaml:"password" json:"password"`
-	SSLMode  string        `yaml:"ssl_mode" json:"ssl_mode"`
-	CacheTTL time.Duration `yaml:"cache_ttl" json:"cache_ttl"`
+	Enabled        bool          `yaml:"enabled" json:"enabled"`
+	Host           string        `yaml:"host" json:"host"`
+	Port           int           `yaml:"port" json:"port"`
+	Database       string        `yaml:"database" json:"database"`
+	Schema         string        `yaml:"schema" json:"schema"`
+	User           string        `yaml:"user" json:"user"`
+	Password       string        `yaml:"password" json:"password"`
+	SSLMode        string        `yaml:"ssl_mode" json:"ssl_mode"`
+	CacheTTL       time.Duration `yaml:"cache_ttl" json:"cache_ttl"`
+	PreferDatabase bool          `yaml:"prefer_database" json:"prefer_database"` // Prefer database over manifests
 }
 
 // ToAgentDBConfig converts to agentdb.Config.
@@ -237,13 +238,14 @@ func DefaultIntegrationsConfig() IntegrationsConfig {
 			CacheTTL:  5 * time.Minute,
 		},
 		AgentDB: AgentDBConfig{
-			Enabled:  true,
-			Host:     "192.168.1.61",
-			Port:     5433,
-			Database: "hive",
-			Schema:   "agents",
-			SSLMode:  "disable",
-			CacheTTL: 5 * time.Minute,
+			Enabled:        true,
+			Host:           "192.168.1.61",
+			Port:           5433,
+			Database:       "hive",
+			Schema:         "agents",
+			SSLMode:        "disable",
+			CacheTTL:       5 * time.Minute,
+			PreferDatabase: true,
 		},
 		MCP: MCPConfig{
 			AutoConnect:    true,
@@ -367,6 +369,7 @@ integrations:
     schema: agents
     ssl_mode: disable
     cache_ttl: 5m
+    prefer_database: true
 
   mcp:
     auto_connect: true

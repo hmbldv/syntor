@@ -7,16 +7,25 @@ import (
 )
 
 // AgentType represents the type of agent for model assignment
+// This is now a simple string alias - all agents are dynamically loaded from databases
 type AgentType string
 
+// Legacy constants for backward compatibility
+// DEPRECATED: Use database-loaded agent definitions instead
+// These are kept only to prevent breaking existing code during migration
 const (
-	AgentSNTR          AgentType = "sntr"          // Primary orchestration agent (renamed from coordination)
+	AgentSNTR          AgentType = "sntr"          // Primary orchestration agent
 	AgentCoordination  AgentType = "sntr"          // Alias for backwards compatibility
 	AgentDocumentation AgentType = "documentation"
 	AgentGit           AgentType = "git"
 	AgentWorker        AgentType = "worker"
 	AgentWorkerCode    AgentType = "worker_code"   // Worker for code-specific tasks
 )
+
+// NewAgentType creates an AgentType from a string (for dynamic agents)
+func NewAgentType(name string) AgentType {
+	return AgentType(name)
+}
 
 // AvailableModels defines all models that SYNTOR supports
 var AvailableModels = []Model{
@@ -133,18 +142,24 @@ var AvailableModels = []Model{
 }
 
 // DefaultModelAssignments defines the default model for each agent type
+// DEPRECATED: These are fallbacks only - prefer database-loaded configurations
 var DefaultModelAssignments = map[AgentType]string{
 	AgentSNTR:          "mistral:7b",
-	AgentDocumentation: "deepseek-coder-v2:16b",
-	AgentGit:           "llama3.2:8b",
-	AgentWorker:        "llama3.2:3b",
-	AgentWorkerCode:    "qwen2.5-coder:7b",
+	AgentDocumentation: "phi4:14b",
+	AgentGit:           "mistral:7b",
+	AgentWorker:        "mistral:7b",
+	AgentWorkerCode:    "qwen2.5-coder:14b",
 }
+
+// DynamicModelResolver is a function that resolves models dynamically from databases
+// It returns the model ID for an agent, or empty string if not found
+type DynamicModelResolver func(ctx context.Context, agentName string) (modelID string, err error)
 
 // Registry manages inference providers and model assignments
 type Registry struct {
 	providers        map[string]Provider
 	modelAssignments map[AgentType]string
+	dynamicResolver  DynamicModelResolver // Optional: resolve from database
 	defaultProvider  string
 	defaultModel     string
 	mu               sync.RWMutex
@@ -206,6 +221,14 @@ func (r *Registry) SetDefaultModel(modelID string) {
 	r.defaultModel = modelID
 }
 
+// SetDynamicResolver sets a function to resolve models dynamically from databases
+// When set, this is tried first before falling back to static assignments
+func (r *Registry) SetDynamicResolver(resolver DynamicModelResolver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dynamicResolver = resolver
+}
+
 // GetDefaultModel returns the default model
 func (r *Registry) GetDefaultModel() string {
 	r.mu.RLock()
@@ -221,6 +244,7 @@ func (r *Registry) SetModelForAgent(agent AgentType, modelID string) {
 }
 
 // GetModelForAgent returns the assigned model for an agent type
+// It first tries the dynamic resolver (database), then static assignments, then default
 func (r *Registry) GetModelForAgent(agent AgentType) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -228,6 +252,24 @@ func (r *Registry) GetModelForAgent(agent AgentType) string {
 		return model
 	}
 	return r.defaultModel
+}
+
+// GetModelForAgentDynamic returns the model for an agent, checking database first
+// This is the preferred method when a context is available
+func (r *Registry) GetModelForAgentDynamic(ctx context.Context, agentName string) string {
+	r.mu.RLock()
+	resolver := r.dynamicResolver
+	r.mu.RUnlock()
+
+	// Try dynamic resolver first
+	if resolver != nil {
+		if model, err := resolver(ctx, agentName); err == nil && model != "" {
+			return model
+		}
+	}
+
+	// Fall back to static assignment
+	return r.GetModelForAgent(AgentType(agentName))
 }
 
 // GetAllAssignments returns all model assignments
