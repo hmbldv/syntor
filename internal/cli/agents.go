@@ -146,11 +146,13 @@ func runAgentByName(agentName string, message string) error {
 
 	if syntorConfig.Integrations.AgentDB.Enabled {
 		loaderCfg := agentdb.UnifiedLoaderConfig{
-			AgentDBConfig:  &agentdb.Config{
+			AgentDBConfig: &agentdb.Config{
 				Host:     syntorConfig.Integrations.AgentDB.Host,
 				Port:     syntorConfig.Integrations.AgentDB.Port,
 				Database: syntorConfig.Integrations.AgentDB.Database,
 				Schema:   syntorConfig.Integrations.AgentDB.Schema,
+				User:     syntorConfig.Integrations.AgentDB.User,
+				Password: syntorConfig.Integrations.AgentDB.Password,
 				SSLMode:  syntorConfig.Integrations.AgentDB.SSLMode,
 				CacheTTL: syntorConfig.Integrations.AgentDB.CacheTTL,
 			},
