@@ -965,55 +965,8 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
-	case "sntr", "coordination":
-		m.currentAgent = inference.AgentSNTR
-		m.addSystemMessage("Switched to sntr agent")
-		if args != "" {
-			return m.sendMessage(args)
-		}
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		return m, nil
-
-	case "docs":
-		m.currentAgent = inference.AgentDocumentation
-		m.addSystemMessage("Switched to documentation agent")
-		if args != "" {
-			return m.sendMessage(args)
-		}
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		return m, nil
-
-	case "git":
-		m.currentAgent = inference.AgentGit
-		m.addSystemMessage("Switched to git agent")
-		if args != "" {
-			return m.sendMessage(args)
-		}
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		return m, nil
-
-	case "worker":
-		m.currentAgent = inference.AgentWorker
-		m.addSystemMessage("Switched to worker agent")
-		if args != "" {
-			return m.sendMessage(args)
-		}
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		return m, nil
-
-	case "code":
-		m.currentAgent = inference.AgentWorkerCode
-		m.addSystemMessage("Switched to code worker agent")
-		if args != "" {
-			return m.sendMessage(args)
-		}
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		return m, nil
+	case "agent":
+		return m.handleAgentSwitch(args)
 
 	case "copy":
 		if args == "" {
@@ -1069,15 +1022,151 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	default:
 		// Check if it's a custom command
 		if cmd, ok := m.cmdRegistry.GetCommand(cmdName); ok && cmd.Category == "custom" {
-			// Custom commands would need the original REPL's prompt template
 			m.addSystemMessage(fmt.Sprintf("Custom command /%s not yet supported in TUI mode", cmdName))
-		} else {
-			m.addSystemMessage(fmt.Sprintf("Unknown command: /%s. Type /help for available commands.", cmdName))
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+
+		// Try to match as a dynamic agent name from database
+		if m.tryDynamicAgentSwitch(cmdName) {
+			m.addSystemMessage(fmt.Sprintf("Switched to %s agent", cmdName))
+			if args != "" {
+				return m.sendMessage(args)
+			}
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+
+		m.addSystemMessage(fmt.Sprintf("Unknown command: /%s. Type /help for available commands.", cmdName))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+}
+
+// handleAgentSwitch handles the /agent command for dynamic agent switching
+func (m Model) handleAgentSwitch(args string) (tea.Model, tea.Cmd) {
+	if args == "" {
+		// List all available agents
+		return m.handleAgentsList()
+	}
+
+	// Parse agent name and optional message
+	parts := strings.SplitN(args, " ", 2)
+	agentName := strings.ToLower(parts[0])
+	message := ""
+	if len(parts) > 1 {
+		message = parts[1]
+	}
+
+	// Try to switch to the agent
+	if m.tryDynamicAgentSwitch(agentName) {
+		m.addSystemMessage(fmt.Sprintf("Switched to %s agent", agentName))
+		if message != "" {
+			return m.sendMessage(message)
 		}
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 		return m, nil
 	}
+
+	m.addSystemMessage(fmt.Sprintf("Agent '%s' not found. Use /agent to list available agents.", agentName))
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// handleAgentsList lists all available agents from the database
+func (m Model) handleAgentsList() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Available Agents ===\n\n")
+	sb.WriteString("Usage: /agent <name> [message]\n")
+	sb.WriteString("   or: /<name> [message]  (direct shortcut)\n\n")
+
+	// Get agents from AgentDB if available
+	if m.services != nil && m.services.AgentLoader != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		agents, err := m.services.AgentLoader.ListAgents(ctx)
+		if err == nil && len(agents) > 0 {
+			for _, agent := range agents {
+				model := agent.Model
+				if model == "" {
+					model = "default"
+				}
+				sb.WriteString(fmt.Sprintf("  %-15s %-35s %s\n", agent.Name, agent.Role, model))
+			}
+			sb.WriteString(fmt.Sprintf("\nTotal: %d agents\n", len(agents)))
+		} else if err != nil {
+			sb.WriteString(fmt.Sprintf("Error loading agents: %v\n", err))
+		}
+	} else if m.services != nil && m.services.FalkorDBAvailable && m.services.FalkorDB != nil {
+		// Fallback to FalkorDB
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		agents, err := m.services.FalkorDB.ListAgents(ctx, "")
+		if err == nil && len(agents) > 0 {
+			for _, agent := range agents {
+				desc := agent.Role
+				if desc == "" {
+					desc = string(agent.Type)
+				}
+				sb.WriteString(fmt.Sprintf("  %-15s %s\n", agent.Name, desc))
+			}
+			sb.WriteString(fmt.Sprintf("\nTotal: %d agents\n", len(agents)))
+		}
+	} else {
+		sb.WriteString("  (Agent database not connected)\n")
+		sb.WriteString("\n  Common agents:\n")
+		sb.WriteString("    sntr      - Primary orchestrator\n")
+		sb.WriteString("    coder     - Development partner\n")
+		sb.WriteString("    paladin   - Security specialist\n")
+	}
+
+	m.addSystemMessage(sb.String())
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+// tryDynamicAgentSwitch attempts to switch to an agent by name
+// Returns true if the agent was found and switched to
+func (m *Model) tryDynamicAgentSwitch(agentName string) bool {
+	agentName = strings.ToLower(agentName)
+
+	// Check if agent exists in database
+	if m.services != nil && m.services.AgentLoader != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		agent, err := m.services.AgentLoader.LoadAgent(ctx, agentName)
+		if err == nil && agent != nil {
+			m.currentAgent = inference.AgentType(agentName)
+			return true
+		}
+	}
+
+	// Fallback: check FalkorDB
+	if m.services != nil && m.services.FalkorDBAvailable && m.services.FalkorDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		agents, err := m.services.FalkorDB.ListAgents(ctx, "")
+		if err == nil {
+			for _, agent := range agents {
+				if strings.ToLower(agent.Name) == agentName {
+					m.currentAgent = inference.AgentType(agentName)
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // copyCodeBlock copies a code block to the clipboard
@@ -1672,14 +1761,11 @@ func wrapText(text string, width int) string {
 func (m *Model) renderHelp() string {
 	var sb strings.Builder
 	sb.WriteString("=== SYNTOR Commands ===\n\n")
-	sb.WriteString("Agent Commands (from FalkorDB):\n")
-	sb.WriteString("  /agents        - List all agents from FalkorDB graph\n")
-	sb.WriteString("  /route <type>  - Query routing for a task type\n")
-	sb.WriteString("  /sntr          - Switch to sntr orchestrator\n")
-	sb.WriteString("  /docs          - Switch to documentation agent\n")
-	sb.WriteString("  /git           - Switch to git agent\n")
-	sb.WriteString("  /worker        - Switch to worker agent\n")
-	sb.WriteString("  /code          - Switch to code worker agent\n\n")
+	sb.WriteString("Agent Commands:\n")
+	sb.WriteString("  /agent [name]  - List agents or switch to <name>\n")
+	sb.WriteString("  /<name>        - Direct switch to any agent (e.g. /coder, /paladin)\n")
+	sb.WriteString("  /agents        - Show agent status dashboard\n")
+	sb.WriteString("  /route <type>  - Query routing for a task type\n\n")
 	sb.WriteString("Session Commands:\n")
 	sb.WriteString("  /init          - Initialize session, load context\n")
 	sb.WriteString("  /init-project  - Create SYNTOR.md for current project\n")
