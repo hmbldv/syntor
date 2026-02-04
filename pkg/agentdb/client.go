@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // Client provides access to agent definitions stored in PostgreSQL
@@ -225,21 +225,29 @@ func (c *Client) ListDefinitions(ctx context.Context, opts QueryOptions) ([]*Ric
 // ListSummaries returns lightweight agent summaries for routing
 func (c *Client) ListSummaries(ctx context.Context, opts QueryOptions) ([]*AgentSummary, error) {
 	query := fmt.Sprintf(`
-		SELECT agent_id, name, role, team, task_types, capabilities, version
-		FROM %s.definitions
-		WHERE is_current = true
-	`, c.schema)
+		SELECT
+			d.name,
+			d.name,
+			COALESCE(d.role, ''),
+			COALESCE(t.name, ''),
+			COALESCE(d.model_config->>'default_model', ''),
+			COALESCE(d.task_types, '{}'),
+			COALESCE(d.version, 1)
+		FROM %s.definitions d
+		LEFT JOIN %s.teams t ON d.team_id = t.id
+		WHERE d.is_current = true AND d.status = 'active'
+	`, c.schema, c.schema)
 
 	var args []interface{}
 	argNum := 1
 
 	if opts.Team != "" {
-		query += fmt.Sprintf(" AND team = $%d", argNum)
+		query += fmt.Sprintf(" AND t.name = $%d", argNum)
 		args = append(args, opts.Team)
 		argNum++
 	}
 
-	query += " ORDER BY name"
+	query += " ORDER BY d.name"
 
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -250,15 +258,14 @@ func (c *Client) ListSummaries(ctx context.Context, opts QueryOptions) ([]*Agent
 	var summaries []*AgentSummary
 	for rows.Next() {
 		var s AgentSummary
-		var taskTypesJSON, capsJSON []byte
+		var taskTypes pq.StringArray
 
-		err := rows.Scan(&s.AgentID, &s.Name, &s.Role, &s.Team, &taskTypesJSON, &capsJSON, &s.Version)
+		err := rows.Scan(&s.AgentID, &s.Name, &s.Role, &s.Team, &s.Model, &taskTypes, &s.Version)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan error: %w", err)
 		}
 
-		json.Unmarshal(taskTypesJSON, &s.TaskTypes)
-		json.Unmarshal(capsJSON, &s.Capabilities)
+		s.TaskTypes = []string(taskTypes)
 
 		summaries = append(summaries, &s)
 	}

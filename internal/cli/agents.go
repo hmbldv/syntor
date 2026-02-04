@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,117 +18,204 @@ var (
 	agentModel string // Override model for this invocation
 )
 
-// coordinationCmd runs the coordination agent
-var coordinationCmd = &cobra.Command{
-	Use:   "coordination [message]",
-	Short: "Run the coordination agent",
-	Long: `Send a task to the coordination agent for orchestration.
+// agentsCmd is the parent command for agent operations
+var agentsCmd = &cobra.Command{
+	Use:   "agents",
+	Short: "Manage and run agents",
+	Long: `Manage and run agents from the agent database.
 
-The coordination agent analyzes tasks and coordinates other agents
-to accomplish complex multi-step objectives.
+Commands:
+  list    - List all available agents
+  run     - Run an agent with a message
+  info    - Show details about an agent`,
+}
 
-Examples:
-  syntor coordination "analyze the codebase structure"
-  syntor coordination "create a plan to implement feature X"`,
-	Aliases: []string{"coord", "orchestrate"},
+// agentsListCmd lists all agents from the database
+var agentsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all available agents",
+	Long:  `List all agents from the agent database with their roles and models.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		message := strings.Join(args, " ")
-		if message == "" {
-			return fmt.Errorf("please provide a message")
-		}
-		return runAgent(inference.AgentCoordination, message)
+		return listAgents()
 	},
 }
 
-// docsCmd runs the documentation agent
-var docsCmd = &cobra.Command{
-	Use:   "docs [message]",
-	Short: "Run the documentation agent",
-	Long: `Send a task to the documentation agent.
-
-The documentation agent specializes in:
-  - Generating documentation from code
-  - Analyzing code structure and patterns
-  - Creating README files and API docs
+// agentsRunCmd runs a specific agent
+var agentsRunCmd = &cobra.Command{
+	Use:   "run <agent-name> [message]",
+	Short: "Run an agent with a message",
+	Long: `Run a specific agent from the database.
 
 Examples:
-  syntor docs "generate documentation for pkg/inference"
-  syntor docs "explain this codebase"`,
-	Aliases: []string{"documentation", "doc"},
+  syntor agents run sntr "analyze this codebase"
+  syntor agents run coder "write a function to parse JSON"
+  syntor agents run paladin "review security posture"`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		message := strings.Join(args, " ")
+		agentName := args[0]
+		message := ""
+		if len(args) > 1 {
+			message = strings.Join(args[1:], " ")
+		}
 		if message == "" {
 			return fmt.Errorf("please provide a message")
 		}
-		return runAgent(inference.AgentDocumentation, message)
+		return runAgentByName(agentName, message)
 	},
 }
 
-// gitAgentCmd runs the git agent
-var gitAgentCmd = &cobra.Command{
-	Use:   "git [message]",
-	Short: "Run the git agent",
-	Long: `Send a task to the git agent.
-
-The git agent specializes in:
-  - Creating commit messages
-  - Analyzing git history
-  - Managing branches
-  - Code review assistance
-
-Examples:
-  syntor git "create a commit message for staged changes"
-  syntor git "summarize recent commits"`,
+// agentsInfoCmd shows details about an agent
+var agentsInfoCmd = &cobra.Command{
+	Use:   "info <agent-name>",
+	Short: "Show details about an agent",
+	Long:  `Display detailed information about a specific agent from the database.`,
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		message := strings.Join(args, " ")
-		if message == "" {
-			return fmt.Errorf("please provide a message")
-		}
-		return runAgent(inference.AgentGit, message)
+		return showAgentInfo(args[0])
 	},
 }
 
-// workerCmd runs a worker agent
-var workerCmd = &cobra.Command{
-	Use:   "worker [message]",
-	Short: "Run a worker agent",
-	Long: `Send a task to a worker agent.
-
-Worker agents handle general tasks and code-specific operations.
-Use --code flag for code-specific tasks.
+// runCmd is a shortcut to run any agent directly: syntor run <agent> <message>
+var runCmd = &cobra.Command{
+	Use:   "run <agent-name> [message]",
+	Short: "Run an agent (shortcut for 'agents run')",
+	Long: `Run any agent from the database by name.
 
 Examples:
-  syntor worker "summarize this file"
-  syntor worker --code "refactor this function"`,
+  syntor run sntr "coordinate this task"
+  syntor run coder "implement this feature"
+  syntor run paladin "assess security"`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		message := strings.Join(args, " ")
+		agentName := args[0]
+		message := ""
+		if len(args) > 1 {
+			message = strings.Join(args[1:], " ")
+		}
 		if message == "" {
 			return fmt.Errorf("please provide a message")
 		}
-
-		codeMode, _ := cmd.Flags().GetBool("code")
-		agentType := inference.AgentWorker
-		if codeMode {
-			agentType = inference.AgentWorkerCode
-		}
-
-		return runAgent(agentType, message)
+		return runAgentByName(agentName, message)
 	},
 }
 
 func init() {
-	// Add model override flag to all agent commands
-	for _, cmd := range []*cobra.Command{coordinationCmd, docsCmd, gitAgentCmd, workerCmd} {
-		cmd.Flags().StringVarP(&agentModel, "model", "m", "", "override model for this request")
-	}
+	// Build agents command tree
+	agentsCmd.AddCommand(agentsListCmd)
+	agentsCmd.AddCommand(agentsRunCmd)
+	agentsCmd.AddCommand(agentsInfoCmd)
 
-	// Add code flag to worker
-	workerCmd.Flags().Bool("code", false, "use code-specialized model")
+	// Add model override flag
+	agentsRunCmd.Flags().StringVarP(&agentModel, "model", "m", "", "override model for this request")
+	runCmd.Flags().StringVarP(&agentModel, "model", "m", "", "override model for this request")
 }
 
-// runAgent executes a message with the specified agent type
-func runAgent(agentType inference.AgentType, message string) error {
-	return runAgentByName(string(agentType), message)
+// listAgents lists all agents from the database
+func listAgents() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	loader, err := getAgentLoader()
+	if err != nil {
+		return fmt.Errorf("agent database not available: %w", err)
+	}
+	defer loader.Close()
+
+	agents, err := loader.ListAgents(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list agents: %w", err)
+	}
+
+	if len(agents) == 0 {
+		fmt.Println("No agents found in database.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "AGENT\tROLE\tMODEL\tSTATUS")
+	fmt.Fprintln(w, "-----\t----\t-----\t------")
+
+	for _, agent := range agents {
+		model := agent.Model
+		if model == "" {
+			model = "-"
+		}
+		status := "ready"
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", agent.Name, agent.Role, model, status)
+	}
+
+	w.Flush()
+	fmt.Printf("\nTotal: %d agents\n", len(agents))
+	return nil
+}
+
+// showAgentInfo displays details about a specific agent
+func showAgentInfo(agentName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	loader, err := getAgentLoader()
+	if err != nil {
+		return fmt.Errorf("agent database not available: %w", err)
+	}
+	defer loader.Close()
+
+	agent, err := loader.LoadAgent(ctx, agentName)
+	if err != nil {
+		return fmt.Errorf("agent not found: %s", agentName)
+	}
+
+	fmt.Printf("=== Agent: %s ===\n\n", agent.AgentID)
+	fmt.Printf("Source: %s\n", agent.Source)
+	fmt.Printf("Version: %d\n", agent.Version)
+
+	if agent.GetModel() != "" {
+		fmt.Printf("Model: %s\n", agent.GetModel())
+	}
+
+	if agent.Personality != nil {
+		fmt.Printf("\nPersonality:\n")
+		if agent.Personality.Tone != "" {
+			fmt.Printf("  Tone: %s\n", agent.Personality.Tone)
+		}
+		if agent.Personality.Style != "" {
+			fmt.Printf("  Style: %s\n", agent.Personality.Style)
+		}
+	}
+
+	if agent.SystemPrompt != "" {
+		fmt.Printf("\nSystem Prompt (first 500 chars):\n")
+		prompt := agent.SystemPrompt
+		if len(prompt) > 500 {
+			prompt = prompt[:500] + "..."
+		}
+		fmt.Println(prompt)
+	}
+
+	return nil
+}
+
+// getAgentLoader creates an agent loader from config
+func getAgentLoader() (*agentdb.UnifiedLoader, error) {
+	if !syntorConfig.Integrations.AgentDB.Enabled {
+		return nil, fmt.Errorf("agent database is not enabled in config")
+	}
+
+	loaderCfg := agentdb.UnifiedLoaderConfig{
+		AgentDBConfig: &agentdb.Config{
+			Host:     syntorConfig.Integrations.AgentDB.Host,
+			Port:     syntorConfig.Integrations.AgentDB.Port,
+			Database: syntorConfig.Integrations.AgentDB.Database,
+			Schema:   syntorConfig.Integrations.AgentDB.Schema,
+			User:     syntorConfig.Integrations.AgentDB.User,
+			Password: syntorConfig.Integrations.AgentDB.Password,
+			SSLMode:  syntorConfig.Integrations.AgentDB.SSLMode,
+			CacheTTL: syntorConfig.Integrations.AgentDB.CacheTTL,
+		},
+		PreferDatabase: syntorConfig.Integrations.AgentDB.PreferDatabase,
+	}
+
+	return agentdb.NewUnifiedLoader(loaderCfg)
 }
 
 // runAgentByName executes a message with an agent loaded dynamically from databases
@@ -145,37 +234,26 @@ func runAgentByName(agentName string, message string) error {
 	var loadedAgent *agentdb.LoadedAgent
 
 	if syntorConfig.Integrations.AgentDB.Enabled {
-		loaderCfg := agentdb.UnifiedLoaderConfig{
-			AgentDBConfig: &agentdb.Config{
-				Host:     syntorConfig.Integrations.AgentDB.Host,
-				Port:     syntorConfig.Integrations.AgentDB.Port,
-				Database: syntorConfig.Integrations.AgentDB.Database,
-				Schema:   syntorConfig.Integrations.AgentDB.Schema,
-				User:     syntorConfig.Integrations.AgentDB.User,
-				Password: syntorConfig.Integrations.AgentDB.Password,
-				SSLMode:  syntorConfig.Integrations.AgentDB.SSLMode,
-				CacheTTL: syntorConfig.Integrations.AgentDB.CacheTTL,
-			},
-			PreferDatabase: syntorConfig.Integrations.AgentDB.PreferDatabase,
-		}
-		if loader, err := agentdb.NewUnifiedLoader(loaderCfg); err == nil {
+		if loader, err := getAgentLoader(); err == nil {
 			agentLoader = loader
 			defer loader.Close()
 
 			// Load agent definition
 			if loaded, err := loader.LoadAgent(ctx, agentName); err == nil {
 				loadedAgent = loaded
+			} else if verbose {
+				fmt.Printf("Agent %s not found in database, using fallback\n", agentName)
 			}
 		}
 	}
 
-	// Determine model - prefer database, fall back to static
+	// Determine model - prefer database, fall back to default
 	var modelID string
 	if loadedAgent != nil && loadedAgent.GetModel() != "" {
 		modelID = loadedAgent.GetModel()
 	} else {
-		// Fall back to static registry
-		modelID = registry.GetModelForAgent(inference.AgentType(agentName))
+		// Fall back to default model
+		modelID = registry.GetDefaultModel()
 	}
 
 	// Allow model override from flag
@@ -183,10 +261,10 @@ func runAgentByName(agentName string, message string) error {
 		modelID = agentModel
 	}
 
-	// Get provider for model
-	provider, _, err := setup.GetProviderForAgent(registry, inference.AgentType(agentName))
-	if err != nil {
-		return fmt.Errorf("failed to get provider: %w", err)
+	// Get default provider (Ollama)
+	provider, ok := registry.GetDefaultProvider()
+	if !ok {
+		return fmt.Errorf("no inference provider available")
 	}
 
 	// Check provider availability
@@ -232,14 +310,14 @@ func runAgentByName(agentName string, message string) error {
 		},
 	}
 
-	// Get system prompt - prefer database, fall back to static
+	// Get system prompt - prefer database, fall back to generic
 	if loadedAgent != nil && loadedAgent.SystemPrompt != "" {
 		req.System = loadedAgent.SystemPrompt
 		if verbose {
 			fmt.Printf("Using system prompt from database (version %d)\n", loadedAgent.Version)
 		}
 	} else {
-		req.System = getSystemPrompt(inference.AgentType(agentName))
+		req.System = getGenericSystemPrompt(agentName)
 	}
 
 	// Use streaming if configured
@@ -292,74 +370,13 @@ func streamChat(ctx context.Context, provider inference.Provider, req inference.
 	return nil
 }
 
-// getSystemPrompt returns the fallback system prompt for an agent type
-// DEPRECATED: Prefer database-loaded system prompts from agentdb
+// getGenericSystemPrompt returns a generic system prompt for unknown agents
 // This is only used when the database is unavailable or agent not found
-func getSystemPrompt(agentType inference.AgentType) string {
-	// Check for known legacy agent types
-	switch agentType {
-	case inference.AgentSNTR: // Also matches AgentCoordination (same value)
-		return `You are SNTR, the primary AI orchestration agent for SYNTOR.
-
-## Your Role
-You coordinate multi-agent workflows and route tasks to specialized agents.
-
-## Guidelines
-- Analyze tasks and break them into steps
-- Route to appropriate specialized agents
-- Provide clear, actionable responses`
-
-	case inference.AgentDocumentation:
-		return `You are a documentation specialist agent.
-
-## Your Role
-You create clear, comprehensive documentation from code.
-
-## Guidelines
-- Analyze code structure and patterns
-- Generate well-structured documentation
-- Explain complex concepts simply`
-
-	case inference.AgentGit:
-		return `You are a git operations specialist agent.
-
-## Your Role
-You handle git operations and create conventional commit messages.
-
-## Guidelines
-- Use conventional commit format (feat:, fix:, docs:, etc.)
-- Analyze changes before committing
-- Follow git best practices`
-
-	case inference.AgentWorker:
-		return `You are a general worker agent.
-
-## Your Role
-You handle general tasks and assist with various requests.
-
-## Guidelines
-- Be concise and helpful
-- Ask clarifying questions when needed`
-
-	case inference.AgentWorkerCode:
-		return `You are a code specialist worker agent.
-
-## Your Role
-You write, review, and refactor code.
-
-## Guidelines
-- Write clean, well-structured code
-- Follow best practices for the language
-- Explain your code clearly`
-
-	default:
-		// For dynamic agents not in the legacy constants,
-		// return a generic prompt that includes their name
-		return fmt.Sprintf(`You are the %s agent in the SYNTOR multi-agent system.
+func getGenericSystemPrompt(agentName string) string {
+	return fmt.Sprintf(`You are the %s agent in the SYNTOR multi-agent system.
 
 ## Guidelines
 - Be helpful and professional
 - Complete the requested task thoroughly
-- Ask clarifying questions if needed`, string(agentType))
-	}
+- Ask clarifying questions if needed`, agentName)
 }

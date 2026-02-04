@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/setup"
 )
@@ -21,8 +20,7 @@ var modelsCmd = &cobra.Command{
 Commands:
   list    - List available and installed models
   pull    - Download a model
-  status  - Show model status for each agent
-  assign  - Assign a model to an agent`,
+  status  - Show model status for each agent`,
 }
 
 var modelsListCmd = &cobra.Command{
@@ -58,30 +56,9 @@ Examples:
 var modelsStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show model assignments and status",
-	Long: `Show which models are assigned to each agent and their availability status.`,
+	Long:  `Show which models are assigned to each agent (from database) and their availability status.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return showModelStatus()
-	},
-}
-
-var modelsAssignCmd = &cobra.Command{
-	Use:   "assign <agent> <model>",
-	Short: "Assign a model to an agent",
-	Long: `Assign a specific model to an agent type.
-
-Agent types:
-  coordination  - Coordination/orchestration agent
-  docs          - Documentation agent
-  git           - Git operations agent
-  worker        - General worker agent
-  worker_code   - Code-specific worker agent
-
-Examples:
-  syntor models assign coordination mistral:7b
-  syntor models assign docs deepseek-coder-v2:16b`,
-	Args: cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return assignModel(args[0], args[1])
 	},
 }
 
@@ -89,7 +66,6 @@ func init() {
 	modelsCmd.AddCommand(modelsListCmd)
 	modelsCmd.AddCommand(modelsPullCmd)
 	modelsCmd.AddCommand(modelsStatusCmd)
-	modelsCmd.AddCommand(modelsAssignCmd)
 }
 
 func listModels() error {
@@ -220,9 +196,6 @@ func showModelStatus() error {
 		return fmt.Errorf("failed to initialize inference: %w", err)
 	}
 
-	// Get all assignments
-	assignments := registry.GetAllAssignments()
-
 	// Check Ollama availability
 	ollamaProvider, _ := registry.GetProvider("ollama")
 	ollamaAvailable := ollamaProvider != nil && ollamaProvider.IsAvailable(ctx)
@@ -238,24 +211,33 @@ func showModelStatus() error {
 		}
 	}
 
-	fmt.Println("=== Model Assignments ===")
+	// Get agents from database
+	loader, err := getAgentLoader()
+	if err != nil {
+		return fmt.Errorf("agent database not available: %w", err)
+	}
+	defer loader.Close()
+
+	agents, err := loader.ListAgents(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list agents: %w", err)
+	}
+
+	fmt.Println("=== Agent Model Assignments ===")
 	fmt.Println()
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "AGENT\tMODEL\tPROVIDER\tSTATUS")
-	fmt.Fprintln(w, "-----\t-----\t--------\t------")
+	fmt.Fprintln(w, "AGENT\tROLE\tMODEL\tSTATUS")
+	fmt.Fprintln(w, "-----\t----\t-----\t------")
 
-	agentNames := map[inference.AgentType]string{
-		inference.AgentCoordination:  "coordination",
-		inference.AgentDocumentation: "docs",
-		inference.AgentGit:           "git",
-		inference.AgentWorker:        "worker",
-		inference.AgentWorkerCode:    "worker_code",
-	}
+	for _, agent := range agents {
+		modelID := agent.Model
+		if modelID == "" {
+			modelID = registry.GetDefaultModel()
+		}
 
-	for agentType, modelID := range assignments {
-		providerName, _ := registry.GetProviderForModelWithContext(ctx, modelID)
 		status := "unknown"
+		providerName, _ := registry.GetProviderForModelWithContext(ctx, modelID)
 
 		if providerName == "ollama" {
 			if !ollamaAvailable {
@@ -266,63 +248,27 @@ func showModelStatus() error {
 				status = "not pulled"
 			}
 		} else if providerName != "" {
-			// API providers
 			status = "api"
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			agentNames[agentType], modelID, providerName, status)
+		role := agent.Role
+		if len(role) > 30 {
+			role = role[:27] + "..."
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", agent.Name, role, modelID, status)
 	}
 
 	w.Flush()
 
 	fmt.Println()
+	fmt.Printf("Total: %d agents\n", len(agents))
 	fmt.Println("Default model:", registry.GetDefaultModel())
-	fmt.Println("Default provider:", syntorConfig.Inference.Provider)
 
 	if !ollamaAvailable {
 		fmt.Println()
-		fmt.Println("Warning: Ollama is not running. Start it with: docker compose up -d ollama")
+		fmt.Println("Warning: Ollama is not running")
 	}
-
-	return nil
-}
-
-func assignModel(agentType, modelID string) error {
-	// Validate agent type
-	validAgents := map[string]string{
-		"coordination": "Coordination",
-		"docs":         "Documentation",
-		"git":          "Git",
-		"worker":       "Worker",
-		"worker_code":  "WorkerCode",
-	}
-
-	if _, ok := validAgents[agentType]; !ok {
-		return fmt.Errorf("invalid agent type: %s. Valid types: coordination, docs, git, worker, worker_code", agentType)
-	}
-
-	// Update config
-	switch agentType {
-	case "coordination":
-		syntorConfig.Inference.Models.Coordination = modelID
-	case "docs":
-		syntorConfig.Inference.Models.Documentation = modelID
-	case "git":
-		syntorConfig.Inference.Models.Git = modelID
-	case "worker":
-		syntorConfig.Inference.Models.Worker = modelID
-	case "worker_code":
-		syntorConfig.Inference.Models.WorkerCode = modelID
-	}
-
-	// Save config
-	if err := config.SaveSyntorConfig(syntorConfig); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-
-	fmt.Printf("Assigned %s to %s agent\n", modelID, agentType)
-	fmt.Println("Configuration saved to:", config.GlobalConfigPath())
 
 	return nil
 }
