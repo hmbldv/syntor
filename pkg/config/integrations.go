@@ -14,6 +14,7 @@ import (
 
 // IntegrationsConfig holds configuration for all external integrations.
 type IntegrationsConfig struct {
+	Secrets    SecretsConfig    `yaml:"secrets" json:"secrets"`
 	Herald     HeraldConfig     `yaml:"herald" json:"herald"`
 	FalkorDB   FalkorDBConfig   `yaml:"falkordb" json:"falkordb"`
 	AgentDB    AgentDBConfig    `yaml:"agentdb" json:"agentdb"`
@@ -22,6 +23,46 @@ type IntegrationsConfig struct {
 	Hooks      HooksConfig      `yaml:"hooks" json:"hooks"`
 	SubAgent   SubAgentConfig   `yaml:"subagent" json:"subagent"`
 	Systems    SystemsConfig    `yaml:"systems" json:"systems"`
+}
+
+// SecretsConfig holds secrets provider configuration
+type SecretsConfig struct {
+	// Provider type: "env", "vault"
+	Provider string `yaml:"provider" json:"provider"`
+
+	// Cache TTL for secrets
+	CacheTTL time.Duration `yaml:"cache_ttl" json:"cache_ttl"`
+
+	// Vault-specific configuration
+	Vault VaultSecretsConfig `yaml:"vault" json:"vault"`
+}
+
+// VaultSecretsConfig holds Vault-specific settings
+type VaultSecretsConfig struct {
+	// Enabled controls whether Vault is used
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// Address of Vault server
+	Address string `yaml:"address" json:"address"`
+
+	// AuthMethod: "token", "kubernetes", "approle"
+	AuthMethod string `yaml:"auth_method" json:"auth_method"`
+
+	// MountPath for KV v2 engine
+	MountPath string `yaml:"mount_path" json:"mount_path"`
+
+	// PathPrefix for SYNTOR secrets
+	PathPrefix string `yaml:"path_prefix" json:"path_prefix"`
+
+	// AppRole configuration
+	RoleID       string `yaml:"role_id" json:"role_id"`
+	SecretIDPath string `yaml:"secret_id_path" json:"secret_id_path"`
+
+	// Timeout for Vault operations
+	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+
+	// FallbackEnabled allows env var fallback if Vault unavailable
+	FallbackEnabled bool `yaml:"fallback_enabled" json:"fallback_enabled"`
 }
 
 // HeraldConfig holds Herald gateway configuration.
@@ -224,6 +265,19 @@ type HostSystemConfig struct {
 // DefaultIntegrationsConfig returns default integrations configuration.
 func DefaultIntegrationsConfig() IntegrationsConfig {
 	return IntegrationsConfig{
+		Secrets: SecretsConfig{
+			Provider: "vault",
+			CacheTTL: 5 * time.Minute,
+			Vault: VaultSecretsConfig{
+				Enabled:         true,
+				Address:         "http://192.168.1.61:8200",
+				AuthMethod:      "token",
+				MountPath:       "secret",
+				PathPrefix:      "syntor",
+				Timeout:         10 * time.Second,
+				FallbackEnabled: true,
+			},
+		},
 		Herald: HeraldConfig{
 			Enabled:          true,
 			BaseURL:          "http://192.168.1.61:8090",
@@ -349,6 +403,21 @@ cli:
   auto_approve: false
 
 integrations:
+  secrets:
+    provider: vault
+    cache_ttl: 5m
+    vault:
+      enabled: true
+      address: http://192.168.1.61:8200
+      auth_method: token      # or "approle" for production
+      mount_path: secret
+      path_prefix: syntor
+      timeout: 10s
+      fallback_enabled: true  # Use env vars if Vault unavailable
+      # For AppRole auth:
+      # role_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      # secret_id_path: ~/.syntor/.vault-secret-id
+
   herald:
     enabled: true
     base_url: http://192.168.1.61:8090
