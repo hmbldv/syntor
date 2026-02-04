@@ -45,12 +45,15 @@ Manage models:
   syntor models pull mistral:7b
   syntor models status`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Load configuration
-		cfg, err := config.LoadSyntorConfig()
+		// Load configuration with secrets resolution
+		cfg, resolver, err := config.LoadSyntorConfigWithSecrets()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 		syntorConfig = cfg
+		// Note: resolver is used during loading, secrets are already resolved
+		// We could store it globally if needed for runtime secret refresh
+		_ = resolver
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
