@@ -13,10 +13,11 @@ import (
 
 // ContextGatherer collects context from various sources
 type ContextGatherer struct {
-	manifestStore *manifest.ManifestStore
-	toolRegistry  *tools.Registry
-	projectPath   string
-	memoryStore   MemoryStore
+	manifestStore              *manifest.ManifestStore
+	toolRegistry               *tools.Registry
+	projectPath                string
+	memoryStore                MemoryStore
+	projectInstructionsContent string // Pre-formatted project instructions + rules
 }
 
 // MemoryStore interface for retrieving stored context
@@ -44,6 +45,19 @@ func (g *ContextGatherer) SetMemoryStore(store MemoryStore) {
 // SetToolRegistry sets the tool registry for tool context gathering
 func (g *ContextGatherer) SetToolRegistry(registry *tools.Registry) {
 	g.toolRegistry = registry
+}
+
+// SetProjectInstructionsContent sets pre-formatted project instructions + rules
+// for system prompt injection. Call config.FindProjectInstructions() and
+// config.FormatProjectInstructions() externally, then pass the result here.
+func (g *ContextGatherer) SetProjectInstructionsContent(content string) {
+	g.projectInstructionsContent = content
+}
+
+// GatherProjectInstructionsFormatted returns the formatted project instructions
+// and rules content for system prompt injection.
+func (g *ContextGatherer) GatherProjectInstructionsFormatted() string {
+	return g.projectInstructionsContent
 }
 
 // GatherToolContext generates tool descriptions for the system prompt
@@ -214,7 +228,7 @@ func (g *ContextGatherer) GatherFullContext(ctx context.Context, planMode bool) 
 		promptCtx.Agents = agents
 	}
 
-	// Gather project context
+	// Gather project context (YAML-based)
 	project, err := g.GatherProjectContext()
 	if err == nil && project != nil {
 		promptCtx.Project = project
@@ -224,6 +238,14 @@ func (g *ContextGatherer) GatherFullContext(ctx context.Context, planMode bool) 
 	memory, err := g.GatherMemory(ctx, "")
 	if err == nil {
 		promptCtx.Memory = memory
+	}
+
+	// Include project instructions (SYNTOR.md + rules) as formatted content
+	if piFormatted := g.GatherProjectInstructionsFormatted(); piFormatted != "" {
+		if promptCtx.Custom == nil {
+			promptCtx.Custom = make(map[string]interface{})
+		}
+		promptCtx.Custom["project_instructions"] = piFormatted
 	}
 
 	return promptCtx, nil

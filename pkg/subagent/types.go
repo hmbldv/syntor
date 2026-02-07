@@ -71,6 +71,7 @@ type SubAgent struct {
 
 	// Task information
 	Task        string    `json:"task"`
+	BlockedBy   []string  `json:"blocked_by,omitempty"` // IDs of tasks this agent is blocked by
 	Context     *Context  `json:"context,omitempty"`
 	Result      *Result   `json:"result,omitempty"`
 
@@ -92,6 +93,9 @@ type Context struct {
 
 	// Messages is the conversation history for this sub-agent
 	Messages    []Message `json:"messages,omitempty"`
+
+	// Inbox is the channel for receiving inter-agent messages
+	Inbox       <-chan AgentMessage `json:"-"`
 
 	// Tools available to this sub-agent (subset of parent's tools)
 	AllowedTools []string `json:"allowed_tools,omitempty"`

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/syntor/syntor/pkg/tools/security"
 )
 
 // SecurityHandler checks for security concerns in tool calls.
@@ -263,6 +265,46 @@ func (h *RateLimitHandler) Execute(ctx context.Context, hookCtx *HookContext) (*
 	h.history[key] = append(recent, now)
 
 	return &HookResult{Action: ActionContinue}, nil
+}
+
+// GitSafetyHandler validates git commands for safety.
+type GitSafetyHandler struct{}
+
+func (h *GitSafetyHandler) Execute(ctx context.Context, hookCtx *HookContext) (*HookResult, error) {
+	if hookCtx.ToolName != "bash" {
+		return &HookResult{Action: ActionContinue}, nil
+	}
+
+	cmd, ok := hookCtx.ToolParams["command"].(string)
+	if !ok {
+		return &HookResult{Action: ActionContinue}, nil
+	}
+
+	if !security.IsGitCommand(cmd) {
+		return &HookResult{Action: ActionContinue}, nil
+	}
+
+	result := security.ValidateGitCommand(cmd)
+	if result == nil {
+		return &HookResult{Action: ActionContinue}, nil
+	}
+
+	// Map security package actions to hook actions
+	var action HookAction
+	switch result.Action {
+	case security.GitActionBlock:
+		action = ActionBlock
+	case security.GitActionConfirm:
+		action = ActionConfirm
+	default:
+		action = ActionContinue
+	}
+
+	return &HookResult{
+		Action:  action,
+		Reason:  result.Reason,
+		Message: result.Message,
+	}, nil
 }
 
 // Helper functions

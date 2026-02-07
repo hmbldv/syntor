@@ -28,6 +28,10 @@ const (
 
 	// HookPromptSubmit runs when user submits a prompt.
 	HookPromptSubmit HookType = "prompt_submit"
+
+	// HookPreCompact runs before context compaction.
+	// Hooks can inject preserve-keys to ensure critical info survives.
+	HookPreCompact HookType = "pre_compact"
 )
 
 // HookAction specifies what to do with tool execution.
@@ -45,6 +49,9 @@ const (
 
 	// ActionContinue proceeds to the next hook (default).
 	ActionContinue HookAction = "continue"
+
+	// ActionConfirm requires user confirmation before proceeding.
+	ActionConfirm HookAction = "confirm"
 )
 
 // Hook defines a hook that can intercept tool execution.
@@ -152,6 +159,9 @@ const (
 
 	// BuiltinConfirm prompts for user confirmation.
 	BuiltinConfirm BuiltinHook = "confirm"
+
+	// BuiltinGitSafety validates git commands for safety.
+	BuiltinGitSafety BuiltinHook = "git_safety"
 )
 
 // Config holds hooks configuration.

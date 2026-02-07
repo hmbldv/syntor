@@ -36,11 +36,27 @@ type AgentModels struct {
 	WorkerCode    string `yaml:"worker_code" json:"worker_code"`
 }
 
+// ContextConfig holds context window management settings
+type ContextConfig struct {
+	MaxTokens      int      `yaml:"max_tokens" json:"max_tokens"`
+	CompactAt      float64  `yaml:"compact_at" json:"compact_at"`
+	PreserveRecent int      `yaml:"preserve_recent" json:"preserve_recent"`
+	PreserveKeys   []string `yaml:"preserve_keys" json:"preserve_keys"`
+}
+
+// PermissionsConfig holds permission auto-allow settings
+type PermissionsConfig struct {
+	DefaultMode string `yaml:"default_mode" json:"default_mode"` // "plan" or "auto"
+	ConfigPath  string `yaml:"config_path" json:"config_path"`
+}
+
 // SyntorConfig holds the complete SYNTOR configuration (YAML format)
 type SyntorConfig struct {
 	Inference    InferenceConfig    `yaml:"inference" json:"inference"`
 	CLI          CLIConfig          `yaml:"cli" json:"cli"`
 	Integrations IntegrationsConfig `yaml:"integrations" json:"integrations"`
+	Context      ContextConfig      `yaml:"context" json:"context"`
+	Permissions  PermissionsConfig  `yaml:"permissions" json:"permissions"`
 }
 
 // CLIConfig holds CLI-specific configuration
@@ -78,12 +94,32 @@ func DefaultCLIConfig() CLIConfig {
 	}
 }
 
+// DefaultContextConfig returns default context window configuration
+func DefaultContextConfig() ContextConfig {
+	return ContextConfig{
+		MaxTokens:      120000,
+		CompactAt:      0.75,
+		PreserveRecent: 10,
+		PreserveKeys:   []string{"working_directory", "active_agent"},
+	}
+}
+
+// DefaultPermissionsConfig returns default permissions configuration
+func DefaultPermissionsConfig() PermissionsConfig {
+	return PermissionsConfig{
+		DefaultMode: "plan",
+		ConfigPath:  "",
+	}
+}
+
 // DefaultSyntorConfig returns default SYNTOR configuration
 func DefaultSyntorConfig() SyntorConfig {
 	return SyntorConfig{
 		Inference:    DefaultInferenceConfig(),
 		CLI:          DefaultCLIConfig(),
 		Integrations: DefaultIntegrationsConfig(),
+		Context:      DefaultContextConfig(),
+		Permissions:  DefaultPermissionsConfig(),
 	}
 }
 

@@ -19,7 +19,9 @@ import (
 	"github.com/syntor/syntor/pkg/falkordb"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/manifest"
+	"github.com/syntor/syntor/pkg/memory"
 	"github.com/syntor/syntor/pkg/prompt"
+	"github.com/syntor/syntor/pkg/session"
 	"github.com/syntor/syntor/pkg/setup"
 	"github.com/syntor/syntor/pkg/skills"
 	"github.com/syntor/syntor/pkg/stats"
@@ -91,8 +93,9 @@ type Model struct {
 	handoffExecutor  *coordination.Executor
 
 	// Manifest and prompt system
-	manifestStore *manifest.ManifestStore
-	promptBuilder *prompt.Builder
+	manifestStore   *manifest.ManifestStore
+	promptBuilder   *prompt.Builder
+	contextGatherer *prompt.ContextGatherer
 
 	// Autocomplete
 	showSuggestions    bool
@@ -130,6 +133,7 @@ type Model struct {
 
 	// Skills system
 	skillManager *skills.SkillManager
+	activeSkills map[string]*skills.Skill // Skills activated via slash commands
 
 	// Stats tracking
 	stats *stats.Stats
@@ -137,6 +141,10 @@ type Model struct {
 	// Session state
 	sessionInitialized bool
 	sessionStartTime   time.Time
+	sessionManager     *session.Manager
+
+	// Memory system
+	memoryManager *memory.Manager
 
 	// Token tracking
 	sessionInputTokens  int64
@@ -169,10 +177,21 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 
 	// Initialize prompt builder
 	var promptBuilder *prompt.Builder
+	var contextGatherer *prompt.ContextGatherer
 	if manifestStore != nil {
-		gatherer := prompt.NewContextGatherer(manifestStore, "")
-		promptBuilder = prompt.NewBuilder(manifestStore, gatherer)
+		contextGatherer = prompt.NewContextGatherer(manifestStore, "")
+		promptBuilder = prompt.NewBuilder(manifestStore, contextGatherer)
 	}
+
+	// Load project instructions (SYNTOR.md + .syntor/rules/)
+	if contextGatherer != nil {
+		if pi, err := config.FindProjectInstructions(""); err == nil {
+			contextGatherer.SetProjectInstructionsContent(config.FormatProjectInstructions(pi))
+		}
+	}
+
+	// Initialize memory manager
+	memoryMgr := memory.NewManager("", "")
 
 	// Create text input
 	ti := textinput.New()
@@ -253,6 +272,7 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		handoffExecutor: handoffExecutor,
 		manifestStore:   manifestStore,
 		promptBuilder:   promptBuilder,
+		contextGatherer: contextGatherer,
 		cmdRegistry:     NewCommandRegistry(),
 		mdRenderer:      mdRenderer,
 		toolRegistry:    toolRegistry,
@@ -272,6 +292,7 @@ func New(cfg *config.SyntorConfig) (*Model, error) {
 		globalContext:   globalContext,
 		skillManager:    skillManager,
 		stats:           statsTracker,
+		memoryManager:   memoryMgr,
 	}
 
 	return m, nil
@@ -448,6 +469,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streaming = false
 			m.chunkCount = 0
 			m.clearActivity()
+
+			// Add completed stream to conversation history
+			finalContent := m.streamBuffer.String()
+			if finalContent != "" {
+				m.conversationHistory = append(m.conversationHistory, inference.Message{
+					Role:    "assistant",
+					Content: finalContent,
+				})
+			}
+
+			// Auto-save session
+			m.autoSaveSession()
 		}
 
 	case StreamEndMsg:
@@ -469,6 +502,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ErrorMsg:
 		m.addSystemMessage(fmt.Sprintf("Error: %v", msg.Err))
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+
+	case DispatchResultMsg:
+		if msg.Error != nil {
+			m.addSystemMessage(fmt.Sprintf("Dispatch failed: %v", msg.Error))
+		} else {
+			m.addSystemMessage(fmt.Sprintf("Dispatched to %s\n  Job: %s\n  Status: %s", msg.Result.Machine, msg.Result.JobID, msg.Result.Status))
+		}
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 
@@ -506,6 +548,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    "assistant",
 				Content: msg.Content,
 			})
+
+			// Auto-save session
+			m.autoSaveSession()
 
 			// Parse response for tool calls
 			if m.toolParser != nil && m.toolParser.ContainsToolCalls(msg.Content) {
@@ -1019,12 +1064,26 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "skills":
 		return m.handleSkillsList()
 
+	case "dispatch":
+		return m.handleDispatch(args)
+
+	case "forge":
+		return m.handleDispatch("forge " + args)
+
+	case "pali":
+		return m.handleDispatch("pali " + args)
+
 	default:
 		// Check if it's a custom command
 		if cmd, ok := m.cmdRegistry.GetCommand(cmdName); ok && cmd.Category == "custom" {
 			m.addSystemMessage(fmt.Sprintf("Custom command /%s not yet supported in TUI mode", cmdName))
 			m.viewport.SetContent(m.renderMessages())
 			m.viewport.GotoBottom()
+			return m, nil
+		}
+
+		// Try to match as a skill name first
+		if m.trySkillInvoke(cmdName, args) {
 			return m, nil
 		}
 
@@ -1167,6 +1226,56 @@ func (m *Model) tryDynamicAgentSwitch(agentName string) bool {
 	}
 
 	return false
+}
+
+// trySkillInvoke attempts to invoke a skill by name
+// Returns true if the skill was found and invoked
+func (m *Model) trySkillInvoke(skillName string, args string) bool {
+	if m.skillManager == nil {
+		return false
+	}
+
+	skill, ok := m.skillManager.Get(skillName)
+	if !ok {
+		return false
+	}
+
+	// Skill found - inject it into the conversation context
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Skill Activated: %s ===\n\n", skill.Name))
+	if skill.Description != "" {
+		sb.WriteString(fmt.Sprintf("%s\n\n", skill.Description))
+	}
+	if skill.AlwaysActive {
+		sb.WriteString("Note: This skill is always active and already injected into all prompts.\n")
+	} else {
+		sb.WriteString("Skill context has been added to the current conversation.\n")
+	}
+	if args != "" {
+		sb.WriteString(fmt.Sprintf("\nProcessing with skill context: %s\n", args))
+	}
+
+	m.addSystemMessage(sb.String())
+
+	// If not always active, inject the skill into conversation context
+	if !skill.AlwaysActive {
+		// Store the active skill for prompt injection
+		if m.activeSkills == nil {
+			m.activeSkills = make(map[string]*skills.Skill)
+		}
+		m.activeSkills[skillName] = skill
+	}
+
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+
+	// If args provided, send as a message with the skill context
+	if args != "" {
+		m.input.SetValue(args)
+		// Don't send automatically - let user press enter to confirm
+	}
+
+	return true
 }
 
 // copyCodeBlock copies a code block to the clipboard
@@ -1362,6 +1471,17 @@ func (m *Model) addSystemMessage(content string) {
 		Role:    "system",
 		Content: content,
 	})
+}
+
+// autoSaveSession saves conversation history to the session manager.
+func (m *Model) autoSaveSession() {
+	if m.sessionManager == nil {
+		return
+	}
+	if err := m.sessionManager.AppendMessages(m.conversationHistory, string(m.currentAgent)); err != nil {
+		// Non-fatal: log but don't interrupt the user
+		_ = err
+	}
 }
 
 // View implements tea.Model
@@ -1774,6 +1894,21 @@ func (m *Model) renderHelp() string {
 	sb.WriteString("  /plan          - Enter plan mode for complex tasks\n")
 	sb.WriteString("  /checkpoint    - Create manual checkpoint\n")
 	sb.WriteString("  /skills        - List available skills\n\n")
+
+	// Dynamically list available skills
+	if m.skillManager != nil && m.skillManager.Count() > 0 {
+		sb.WriteString("Skill Commands:\n")
+		allSkills := m.skillManager.GetAll()
+		for _, skill := range allSkills {
+			status := ""
+			if skill.AlwaysActive {
+				status = " (always active)"
+			}
+			sb.WriteString(fmt.Sprintf("  /%-13s - %s%s\n", skill.Name, truncateString(skill.Description, 45), status))
+		}
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("System Commands:\n")
 	sb.WriteString("  /help          - Show this help\n")
 	sb.WriteString("  /status        - Show full system status\n")
@@ -1784,6 +1919,14 @@ func (m *Model) renderHelp() string {
 	sb.WriteString("  /copy [n]      - Copy code block to clipboard\n")
 	sb.WriteString("  /quit          - Exit SYNTOR\n")
 	return sb.String()
+}
+
+// truncateString truncates a string to maxLen and adds ... if needed
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // getAgentDisplayName returns the display name for an agent type
@@ -2422,6 +2565,46 @@ func (m Model) handleCheckpoint() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleDispatch dispatches a task to a remote machine via Herald.
+func (m Model) handleDispatch(args string) (tea.Model, tea.Cmd) {
+	if m.services == nil || m.services.Herald == nil || !m.services.HeraldAvailable {
+		m.addSystemMessage("Herald is not available. Cannot dispatch tasks.")
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	parts := strings.SplitN(strings.TrimSpace(args), " ", 2)
+	if len(parts) < 2 || parts[1] == "" {
+		m.addSystemMessage("Usage: /dispatch <machine> <task>\n       /forge <task>\n       /pali <task>")
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+	}
+
+	machine := parts[0]
+	task := parts[1]
+	client := m.services.Herald
+
+	m.addSystemMessage(fmt.Sprintf("Dispatching to %s: %s", machine, task))
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		result, err := client.Dispatch(ctx, machine, task)
+		if err != nil {
+			return ErrorMsg{Err: fmt.Errorf("dispatch failed: %w", err)}
+		}
+
+		return ChatResponseMsg{
+			Content: fmt.Sprintf("Job dispatched to %s\nJob ID: %s\nStatus: %s", result.Machine, result.JobID, result.Status),
+		}
+	}
+}
+
 // handleSkillsList lists available skills
 func (m Model) handleSkillsList() (tea.Model, tea.Cmd) {
 	var sb strings.Builder
@@ -2456,6 +2639,7 @@ func (m Model) handleSkillsList() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleDispatch dispatches a task to a remote machine via Herald.
 // buildDynamicPrompt builds a system prompt using the manifest-based prompt builder
 // Falls back to static prompts if the builder isn't available
 // Context Hierarchy: Global (CENTAUR.md) → Project (SYNTOR.md) → Skills
@@ -2493,12 +2677,41 @@ func (m *Model) buildDynamicPrompt(agentType inference.AgentType) string {
 		basePrompt = basePrompt + "\n\n<project-context>\n" + m.projectContext + "\n</project-context>"
 	}
 
+	// Inject project instructions and rules from .syntor/rules/
+	if m.contextGatherer != nil {
+		if piFormatted := m.contextGatherer.GatherProjectInstructionsFormatted(); piFormatted != "" {
+			basePrompt = basePrompt + "\n\n" + piFormatted
+		}
+	}
+
+	// Inject persistent memory (MEMORY.md)
+	if m.memoryManager != nil {
+		if memContent := m.memoryManager.FormatForPrompt(); memContent != "" {
+			basePrompt = basePrompt + "\n\n" + memContent
+		}
+	}
+
 	// Inject always-active skills
 	if m.skillManager != nil {
-		activeSkills := m.skillManager.GetAlwaysActive()
-		if len(activeSkills) > 0 {
-			skillsContent := skills.InjectAll(activeSkills)
+		alwaysActiveSkills := m.skillManager.GetAlwaysActive()
+		if len(alwaysActiveSkills) > 0 {
+			skillsContent := skills.InjectAll(alwaysActiveSkills)
 			basePrompt = basePrompt + "\n\n" + skillsContent
+		}
+	}
+
+	// Inject manually-activated skills (via /<skill-name> commands)
+	if len(m.activeSkills) > 0 {
+		var manualSkills []*skills.Skill
+		for _, skill := range m.activeSkills {
+			// Don't duplicate always-active skills
+			if !skill.AlwaysActive {
+				manualSkills = append(manualSkills, skill)
+			}
+		}
+		if len(manualSkills) > 0 {
+			skillsContent := skills.InjectAll(manualSkills)
+			basePrompt = basePrompt + "\n\n<active-skills>\n" + skillsContent + "\n</active-skills>"
 		}
 	}
 
@@ -2748,11 +2961,42 @@ func (m *Model) executeHandoff(intent *coordination.HandoffIntent) tea.Cmd {
 	}
 }
 
-// Run starts the TUI
-func Run(cfg *config.SyntorConfig) error {
+// RunOptions configures TUI startup behavior.
+type RunOptions struct {
+	ResumeSessionID string // If set, resume this session
+}
+
+// Run starts the TUI with optional configuration.
+func Run(cfg *config.SyntorConfig, opts ...RunOptions) error {
 	model, err := New(cfg)
 	if err != nil {
 		return err
+	}
+
+	// Apply options
+	if len(opts) > 0 && opts[0].ResumeSessionID != "" {
+		// Initialize session manager and resume
+		mgr, err := session.NewManager("")
+		if err != nil {
+			return fmt.Errorf("session manager: %w", err)
+		}
+		model.sessionManager = mgr
+
+		sess, messages, err := mgr.Resume(opts[0].ResumeSessionID)
+		if err != nil {
+			return fmt.Errorf("resume session %s: %w", opts[0].ResumeSessionID, err)
+		}
+
+		// Restore conversation history
+		model.conversationHistory = messages
+		model.addSystemMessage(fmt.Sprintf("Resumed session %s (%d messages)", sess.ID, len(messages)))
+	} else {
+		// Auto-create a new session
+		mgr, err := session.NewManager("")
+		if err == nil {
+			model.sessionManager = mgr
+			mgr.Create(model.workingDir, string(model.currentAgent))
+		}
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())

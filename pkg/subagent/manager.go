@@ -27,7 +27,8 @@ type Manager struct {
 	observersMu sync.RWMutex
 
 	// Dependencies
-	executor Executor
+	executor   Executor
+	messageBus MessageBus
 
 	// Shutdown
 	done chan struct{}
@@ -120,6 +121,11 @@ func (m *Manager) Spawn(ctx context.Context, req SpawnRequest) (*SubAgent, error
 			Constraints:  req.Constraints,
 			Messages:     nil,
 		},
+	}
+
+	// Wire up inter-agent messaging inbox if a bus is configured
+	if m.messageBus != nil {
+		agent.Context.Inbox = m.messageBus.Subscribe(agent.ID)
 	}
 
 	// Register the agent
@@ -585,6 +591,27 @@ func (m *Manager) Cleanup(maxAge time.Duration) int {
 	}
 
 	return removed
+}
+
+// Messaging
+
+// SetMessageBus configures the inter-agent message bus.
+func (m *Manager) SetMessageBus(bus MessageBus) {
+	m.messageBus = bus
+}
+
+// SendToAgent sends a message from one agent to another via the message bus.
+func (m *Manager) SendToAgent(from, to, content string) error {
+	if m.messageBus == nil {
+		return fmt.Errorf("no message bus configured")
+	}
+
+	msg := AgentMessage{
+		Type:    "message",
+		Content: content,
+	}
+
+	return m.messageBus.Send(context.Background(), from, to, msg)
 }
 
 // Close shuts down the manager.

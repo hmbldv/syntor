@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/syntor/syntor/internal/cli/tui"
@@ -145,8 +146,16 @@ func runInteractive() error {
 		return repl.Run()
 	}
 
-	// Default: use TUI mode
-	return tui.Run(syntorConfig)
+	// Check for resume session (set by sessions.go or env var)
+	resumeID := resumeSession
+	if resumeID == "" {
+		resumeID = os.Getenv("SYNTOR_RESUME_SESSION")
+	}
+
+	// Default: use TUI mode with optional resume
+	return tui.Run(syntorConfig, tui.RunOptions{
+		ResumeSessionID: resumeID,
+	})
 }
 
 func sendMessage(message string) error {

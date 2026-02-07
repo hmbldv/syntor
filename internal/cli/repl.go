@@ -12,6 +12,7 @@ import (
 	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/inference"
 	"github.com/syntor/syntor/pkg/setup"
+	"github.com/syntor/syntor/pkg/skills"
 )
 
 // REPL represents the interactive read-eval-print loop
@@ -21,6 +22,8 @@ type REPL struct {
 	currentAgent inference.AgentType
 	history      []string
 	slashCmds    map[string]SlashCommand
+	skillManager *skills.SkillManager
+	activeSkills map[string]*skills.Skill
 }
 
 // SlashCommand represents a custom slash command
@@ -37,12 +40,18 @@ func NewREPL(cfg *config.SyntorConfig) (*REPL, error) {
 		return nil, err
 	}
 
+	// Load skills
+	skillManager := skills.NewSkillManager()
+	skillManager.LoadAll()
+
 	r := &REPL{
 		config:       cfg,
 		registry:     registry,
 		currentAgent: inference.AgentCoordination,
 		history:      make([]string, 0),
 		slashCmds:    make(map[string]SlashCommand),
+		skillManager: skillManager,
+		activeSkills: make(map[string]*skills.Skill),
 	}
 
 	// Register built-in slash commands
@@ -102,6 +111,13 @@ func (r *REPL) registerBuiltinCommands() {
 		Name:        "agents",
 		Description: "List all available agents",
 		Handler:     (*REPL).cmdAgentsList,
+	}
+
+	// Skills command
+	r.slashCmds["skills"] = SlashCommand{
+		Name:        "skills",
+		Description: "List available skills",
+		Handler:     (*REPL).cmdSkillsList,
 	}
 }
 
@@ -211,6 +227,11 @@ func (r *REPL) handleSlashCommand(input string) error {
 		return cmd.Handler(r, args)
 	}
 
+	// Try skill invocation first
+	if r.trySkillInvoke(cmdName, args) {
+		return nil
+	}
+
 	// Try dynamic agent switch - treat unknown commands as potential agent names
 	r.currentAgent = inference.AgentType(cmdName)
 	fmt.Printf("Switched to %s agent\n", cmdName)
@@ -218,6 +239,40 @@ func (r *REPL) handleSlashCommand(input string) error {
 		return r.sendMessage(args)
 	}
 	return nil
+}
+
+// trySkillInvoke attempts to invoke a skill by name
+// Returns true if the skill was found and invoked
+func (r *REPL) trySkillInvoke(skillName string, args string) bool {
+	if r.skillManager == nil {
+		return false
+	}
+
+	skill, ok := r.skillManager.Get(skillName)
+	if !ok {
+		return false
+	}
+
+	// Skill found - inject it into the conversation context
+	fmt.Printf("\n=== Skill Activated: %s ===\n\n", skill.Name)
+	if skill.Description != "" {
+		fmt.Printf("%s\n\n", skill.Description)
+	}
+	if skill.AlwaysActive {
+		fmt.Println("Note: This skill is always active and already injected into all prompts.")
+	} else {
+		fmt.Println("Skill context has been added to the current conversation.")
+		// Store the active skill for prompt injection
+		r.activeSkills[skillName] = skill
+	}
+
+	// If args provided, send as a message with the skill context
+	if args != "" {
+		fmt.Printf("\nProcessing with skill context: %s\n", args)
+		return r.sendMessage(args) == nil
+	}
+
+	return true
 }
 
 // sendMessage sends a message to the current agent
@@ -294,11 +349,30 @@ func (r *REPL) cmdHelp(args string) error {
 	fmt.Println("System Commands:")
 	fmt.Println("  /help          - Show this help")
 	fmt.Println("  /status        - Show current agent and model")
+	fmt.Println("  /skills        - List available skills")
 	fmt.Println("  /models        - List available models")
 	fmt.Println("  /config        - Show configuration")
 	fmt.Println("  /clear         - Clear the screen")
 	fmt.Println("  /quit          - Exit SYNTOR")
 	fmt.Println()
+
+	// Show skills if any are loaded
+	if r.skillManager != nil && r.skillManager.Count() > 0 {
+		fmt.Println("Skill Commands:")
+		allSkills := r.skillManager.GetAll()
+		for _, skill := range allSkills {
+			status := ""
+			if skill.AlwaysActive {
+				status = " (always active)"
+			}
+			desc := skill.Description
+			if len(desc) > 45 {
+				desc = desc[:42] + "..."
+			}
+			fmt.Printf("  /%-13s - %s%s\n", skill.Name, desc, status)
+		}
+		fmt.Println()
+	}
 
 	// Show custom commands if any
 	customCount := 0
@@ -420,6 +494,48 @@ func (r *REPL) cmdAgentsList(args string) error {
 		fmt.Printf("  %-15s %-35s %s\n", agent.Name, agent.Role, model)
 	}
 	fmt.Printf("\nTotal: %d agents\n\n", len(agents))
+	return nil
+}
+
+func (r *REPL) cmdSkillsList(args string) error {
+	fmt.Println("\n=== Available Skills ===")
+	fmt.Println("Usage: /<skill-name> [message]")
+	fmt.Println()
+
+	if r.skillManager == nil || r.skillManager.Count() == 0 {
+		fmt.Println("No skills loaded.")
+		fmt.Println()
+		home, _ := os.UserHomeDir()
+		fmt.Printf("To add skills, create SKILL.md files in:\n")
+		fmt.Printf("  %s\n\n", filepath.Join(home, ".syntor", "skills", "<skill-name>", "SKILL.md"))
+		return nil
+	}
+
+	allSkills := r.skillManager.GetAll()
+	for _, skill := range allSkills {
+		status := ""
+		if skill.AlwaysActive {
+			status = " [always active]"
+		}
+		fmt.Printf("  %s%s\n", skill.Name, status)
+		if skill.Description != "" {
+			fmt.Printf("    %s\n", skill.Description)
+		}
+		if len(skill.Triggers) > 0 {
+			fmt.Printf("    Triggers: %s\n", strings.Join(skill.Triggers, ", "))
+		}
+		fmt.Println()
+	}
+
+	// Show currently active (manually invoked) skills
+	if len(r.activeSkills) > 0 {
+		fmt.Println("Currently Active Skills:")
+		for name := range r.activeSkills {
+			fmt.Printf("  - %s\n", name)
+		}
+		fmt.Println()
+	}
+
 	return nil
 }
 

@@ -159,6 +159,23 @@ func (r *CommandRegistry) registerBuiltinCommands() {
 		Description: "Query FalkorDB for agent routing",
 		Category:    "agent",
 	}
+
+	// Cross-system dispatch commands
+	r.commands["dispatch"] = Command{
+		Name:        "dispatch",
+		Description: "Dispatch task to a machine (/dispatch <machine> <task>)",
+		Category:    "system",
+	}
+	r.commands["forge"] = Command{
+		Name:        "forge",
+		Description: "Dispatch task to Forge (/forge <task>)",
+		Category:    "system",
+	}
+	r.commands["pali"] = Command{
+		Name:        "pali",
+		Description: "Dispatch task to Pali (/pali <task>)",
+		Category:    "system",
+	}
 }
 
 // loadCustomCommands loads custom commands from config directories

@@ -1,4 +1,5 @@
 # Binaries
+/syntor
 /build/
 *.exe
 *.exe~

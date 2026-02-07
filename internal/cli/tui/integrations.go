@@ -200,6 +200,33 @@ type HeraldStatusMsg struct {
 	Error     error
 }
 
+// DispatchResultMsg indicates the result of a machine dispatch.
+type DispatchResultMsg struct {
+	Result  *herald.DispatchResult
+	Machine string
+	Task    string
+	Error   error
+}
+
+// dispatchTask dispatches a task to a machine via Herald.
+func dispatchTask(client *herald.Client, machine, task string) tea.Cmd {
+	return func() tea.Msg {
+		if client == nil {
+			return DispatchResultMsg{Error: fmt.Errorf("Herald not available")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		result, err := client.Dispatch(ctx, machine, task)
+		return DispatchResultMsg{
+			Result:  result,
+			Machine: machine,
+			Task:    task,
+			Error:   err,
+		}
+	}
+}
+
 // FalkorDBStatusMsg indicates FalkorDB connection status.
 type FalkorDBStatusMsg struct {
 	Available bool
