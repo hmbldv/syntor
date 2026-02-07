@@ -131,6 +131,24 @@ func (m *Manager) FormatForPrompt() string {
 		sb.WriteString("\n</memory>\n\n")
 	}
 
+	// Load global topic files
+	if globalTopics, _ := m.LoadTopicFiles("global"); len(globalTopics) > 0 {
+		for name, content := range globalTopics {
+			sb.WriteString(fmt.Sprintf("<memory scope=\"global\" topic=\"%s\">\n", name))
+			sb.WriteString(content)
+			sb.WriteString("\n</memory>\n\n")
+		}
+	}
+
+	// Load project topic files
+	if projectTopics, _ := m.LoadTopicFiles("project"); len(projectTopics) > 0 {
+		for name, content := range projectTopics {
+			sb.WriteString(fmt.Sprintf("<memory scope=\"project\" topic=\"%s\">\n", name))
+			sb.WriteString(content)
+			sb.WriteString("\n</memory>\n\n")
+		}
+	}
+
 	return sb.String()
 }
 
