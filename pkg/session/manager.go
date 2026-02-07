@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 
 // Manager handles session lifecycle: create, resume, list, fork, delete.
 type Manager struct {
+	mu             sync.RWMutex
 	store          *FileStore
 	currentSession *Session
 	lastSavedIndex int // Index of last saved message for incremental appends
@@ -31,6 +33,9 @@ func NewManager(baseDir string) (*Manager, error) {
 
 // Create starts a new session.
 func (m *Manager) Create(workingDir, agentName string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	session := &Session{
 		ID:         uuid.New().String()[:8], // Short ID for usability
 		CreatedAt:  time.Now(),
@@ -51,9 +56,12 @@ func (m *Manager) Create(workingDir, agentName string) (*Session, error) {
 
 // Resume loads an existing session by ID or name prefix.
 func (m *Manager) Resume(idOrName string) (*Session, []inference.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Try exact ID match first
 	if m.store.SessionExists(idOrName) {
-		return m.loadSession(idOrName)
+		return m.loadSessionLocked(idOrName)
 	}
 
 	// Try prefix match on ID or name
@@ -74,7 +82,7 @@ func (m *Manager) Resume(idOrName string) (*Session, []inference.Message, error)
 	case 0:
 		return nil, nil, fmt.Errorf("no session found matching %q", idOrName)
 	case 1:
-		return m.loadSession(matches[0].ID)
+		return m.loadSessionLocked(matches[0].ID)
 	default:
 		var ids []string
 		for _, s := range matches {
@@ -85,8 +93,8 @@ func (m *Manager) Resume(idOrName string) (*Session, []inference.Message, error)
 	}
 }
 
-// loadSession loads a session and its messages.
-func (m *Manager) loadSession(id string) (*Session, []inference.Message, error) {
+// loadSessionLocked loads a session and its messages. Must be called with mu held.
+func (m *Manager) loadSessionLocked(id string) (*Session, []inference.Message, error) {
 	session, err := m.store.LoadSession(id)
 	if err != nil {
 		return nil, nil, err
@@ -111,6 +119,9 @@ func (m *Manager) loadSession(id string) (*Session, []inference.Message, error) 
 // AppendMessages saves new messages incrementally.
 // Only saves messages that haven't been saved yet (since lastSavedIndex).
 func (m *Manager) AppendMessages(history []inference.Message, agentName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.currentSession == nil {
 		return nil // No active session
 	}
@@ -151,6 +162,9 @@ func (m *Manager) List(limit int) ([]SessionSummary, error) {
 
 // Fork creates a new session that starts with the current session's messages.
 func (m *Manager) Fork(newName string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.currentSession == nil {
 		return nil, fmt.Errorf("no active session to fork")
 	}
@@ -200,6 +214,9 @@ func (m *Manager) Delete(id string) error {
 
 // SetName sets the name of the current session.
 func (m *Manager) SetName(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.currentSession == nil {
 		return fmt.Errorf("no active session")
 	}
@@ -209,6 +226,9 @@ func (m *Manager) SetName(name string) error {
 
 // UpdateTokensUsed updates the token count for the current session.
 func (m *Manager) UpdateTokensUsed(tokens int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.currentSession != nil {
 		m.currentSession.TokensUsed = tokens
 	}
@@ -216,6 +236,8 @@ func (m *Manager) UpdateTokensUsed(tokens int64) {
 
 // Current returns the current active session, or nil.
 func (m *Manager) Current() *Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.currentSession
 }
 
@@ -226,6 +248,9 @@ func (m *Manager) BaseDir() string {
 
 // Flush saves any pending session state.
 func (m *Manager) Flush() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	if m.currentSession == nil {
 		return nil
 	}
