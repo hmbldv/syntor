@@ -163,7 +163,7 @@ func (e *Executor) Execute(ctx context.Context, intent *HandoffIntent) (*Handoff
 	return result, nil
 }
 
-// ExecutePlan executes a multi-step plan
+// ExecutePlan executes a multi-step plan, running independent steps concurrently.
 func (e *Executor) ExecutePlan(ctx context.Context, plan *ExecutionPlan) (*PlanExecution, error) {
 	execution := &PlanExecution{
 		Plan:        plan,
@@ -177,49 +177,97 @@ func (e *Executor) ExecutePlan(ctx context.Context, plan *ExecutionPlan) (*PlanE
 	e.planExecutions[plan.ID] = execution
 	e.mu.Unlock()
 
-	// Execute steps in order (respecting dependencies)
-	for i, step := range plan.Steps {
-		// Check dependencies
-		for _, dep := range step.DependsOn {
-			if result, ok := execution.StepResults[dep]; !ok || result.Status != ResultSuccess {
+	// Build a map of step number -> step for dependency lookup
+	stepByNum := make(map[int]PlanStep, len(plan.Steps))
+	for _, step := range plan.Steps {
+		stepByNum[step.StepNumber] = step
+	}
+
+	// Track completed steps
+	completed := make(map[int]bool)
+	var completedMu sync.Mutex
+
+	// Execute in waves: find ready steps, run them concurrently, repeat
+	for len(completed) < len(plan.Steps) {
+		// Find steps whose dependencies are all satisfied
+		var ready []PlanStep
+		for _, step := range plan.Steps {
+			if completed[step.StepNumber] {
+				continue
+			}
+			allDepsReady := true
+			for _, dep := range step.DependsOn {
+				if !completed[dep] {
+					allDepsReady = false
+					break
+				}
+			}
+			if allDepsReady {
+				ready = append(ready, step)
+			}
+		}
+
+		if len(ready) == 0 {
+			// No progress possible — unsatisfied deps (should not happen with valid plans)
+			execution.Status = PlanFailed
+			execution.Error = "no executable steps remaining; possible circular dependency"
+			return execution, fmt.Errorf("plan stuck: no ready steps but %d incomplete", len(plan.Steps)-len(completed))
+		}
+
+		// Execute ready steps concurrently
+		type stepResult struct {
+			stepNum int
+			result  *HandoffResult
+			err     error
+		}
+		resultCh := make(chan stepResult, len(ready))
+
+		for _, step := range ready {
+			go func(s PlanStep) {
+				// Build intent
+				intent := &HandoffIntent{
+					Action:        ActionDelegate,
+					Target:        s.Agent,
+					Task:          s.Action,
+					WaitForResult: true,
+				}
+
+				// Add context from completed steps
+				completedMu.Lock()
+				if len(execution.StepResults) > 0 {
+					intent.Context = map[string]interface{}{
+						"previousResults": e.summarizePreviousResults(execution.StepResults),
+					}
+				}
+				completedMu.Unlock()
+
+				result, err := e.Execute(ctx, intent)
+				resultCh <- stepResult{stepNum: s.StepNumber, result: result, err: err}
+			}(step)
+		}
+
+		// Collect results for this wave
+		for range ready {
+			sr := <-resultCh
+			completedMu.Lock()
+			execution.StepResults[sr.stepNum] = sr.result
+			completedMu.Unlock()
+
+			if sr.err != nil {
 				execution.Status = PlanFailed
-				execution.Error = fmt.Sprintf("dependency step %d not completed", dep)
-				return execution, fmt.Errorf("dependency step %d failed or not completed", dep)
+				execution.Error = fmt.Sprintf("step %d failed: %v", sr.stepNum, sr.err)
+				return execution, sr.err
 			}
-		}
-
-		execution.CurrentStep = i + 1
-
-		// Create intent for this step
-		intent := &HandoffIntent{
-			Action:        ActionDelegate,
-			Target:        step.Agent,
-			Task:          step.Action,
-			WaitForResult: true,
-		}
-
-		// Add context from previous steps
-		if len(execution.StepResults) > 0 {
-			intent.Context = map[string]interface{}{
-				"previousResults": e.summarizePreviousResults(execution.StepResults),
+			if sr.result != nil && sr.result.Status != ResultSuccess {
+				execution.Status = PlanFailed
+				execution.Error = fmt.Sprintf("step %d returned status %s", sr.stepNum, sr.result.Status)
+				return execution, fmt.Errorf("step %d failed with status: %s", sr.stepNum, sr.result.Status)
 			}
-		}
 
-		// Execute the step
-		result, err := e.Execute(ctx, intent)
-		if err != nil {
-			execution.Status = PlanFailed
-			execution.Error = fmt.Sprintf("step %d failed: %v", i+1, err)
-			return execution, err
-		}
-
-		execution.StepResults[step.StepNumber] = result
-
-		// Check if step failed
-		if result.Status != ResultSuccess {
-			execution.Status = PlanFailed
-			execution.Error = fmt.Sprintf("step %d returned status %s", i+1, result.Status)
-			return execution, fmt.Errorf("step %d failed with status: %s", i+1, result.Status)
+			completedMu.Lock()
+			completed[sr.stepNum] = true
+			execution.CurrentStep = len(completed)
+			completedMu.Unlock()
 		}
 	}
 
