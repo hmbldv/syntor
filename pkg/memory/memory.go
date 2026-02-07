@@ -39,6 +39,9 @@ func NewManager(globalDir, projectDir string) *Manager {
 	if projectDir == "" {
 		projectDir = ".syntor"
 	}
+	// Bootstrap: ensure global memory dir exists
+	os.MkdirAll(filepath.Join(globalDir, MemoryDir), 0755)
+
 	return &Manager{
 		globalDir:  globalDir,
 		projectDir: projectDir,

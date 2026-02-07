@@ -104,7 +104,13 @@ func listSessions() error {
 	// Try Herald first
 	heraldClient, err := getHeraldClient()
 	if err == nil && heraldClient.IsEnabled() {
-		return listHeraldSessions(heraldClient)
+		if err := listHeraldSessions(heraldClient); err == nil {
+			return nil
+		}
+		// Herald failed, fall through to local
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Herald sessions unavailable, checking local...\n")
+		}
 	}
 
 	// Fall back to local sessions
@@ -258,9 +264,11 @@ func deleteSession(sessionID string) error {
 }
 
 func getHeraldClient() (*herald.Client, error) {
-	config := herald.DefaultConfig()
-	// TODO: Load from config file
-	return herald.New(config)
+	if syntorConfig == nil || !syntorConfig.Integrations.Herald.Enabled {
+		return nil, fmt.Errorf("herald not configured")
+	}
+	heraldCfg := syntorConfig.Integrations.Herald.ToHeraldConfig()
+	return herald.New(heraldCfg)
 }
 
 func getSessionsDir() string {

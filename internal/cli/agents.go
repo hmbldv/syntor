@@ -10,7 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/syntor/syntor/pkg/agentdb"
+	"github.com/syntor/syntor/pkg/config"
 	"github.com/syntor/syntor/pkg/inference"
+	"github.com/syntor/syntor/pkg/memory"
+	"github.com/syntor/syntor/pkg/session"
 	"github.com/syntor/syntor/pkg/setup"
 )
 
@@ -218,8 +221,23 @@ func getAgentLoader() (*agentdb.UnifiedLoader, error) {
 	return agentdb.NewUnifiedLoader(loaderCfg)
 }
 
-// runAgentByName executes a message with an agent loaded dynamically from databases
+// runOptions holds parameters for runAgentWithOptions.
+type runOptions struct {
+	agentName   string
+	message     string
+	resumeID    string
+	forkID      string
+	sessionName string
+}
+
+// runAgentByName executes a message with an agent loaded dynamically from databases.
+// Thin wrapper around runAgentWithOptions for backward compatibility.
 func runAgentByName(agentName string, message string) error {
+	return runAgentWithOptions(runOptions{agentName: agentName, message: message})
+}
+
+// runAgentWithOptions executes a message with full session, memory, and project instruction support.
+func runAgentWithOptions(opts runOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -239,10 +257,10 @@ func runAgentByName(agentName string, message string) error {
 			defer loader.Close()
 
 			// Load agent definition
-			if loaded, err := loader.LoadAgent(ctx, agentName); err == nil {
+			if loaded, err := loader.LoadAgent(ctx, opts.agentName); err == nil {
 				loadedAgent = loaded
 			} else if verbose {
-				fmt.Printf("Agent %s not found in database, using fallback\n", agentName)
+				fmt.Printf("Agent %s not found in database, using fallback\n", opts.agentName)
 			}
 		}
 	}
@@ -252,7 +270,6 @@ func runAgentByName(agentName string, message string) error {
 	if loadedAgent != nil && loadedAgent.GetModel() != "" {
 		modelID = loadedAgent.GetModel()
 	} else {
-		// Fall back to default model
 		modelID = registry.GetDefaultModel()
 	}
 
@@ -296,59 +313,136 @@ func runAgentByName(agentName string, message string) error {
 	}
 
 	if verbose {
-		fmt.Printf("Using %s with model %s (agent: %s)\n", provider.Name(), modelID, agentName)
+		fmt.Printf("Using %s with model %s (agent: %s)\n", provider.Name(), modelID, opts.agentName)
 	}
 
-	// Build the request
-	req := inference.ChatRequest{
-		Model: modelID,
-		Messages: []inference.Message{
-			{
-				Role:    "user",
-				Content: message,
-			},
-		},
+	// Initialize session manager
+	var sessionMgr *session.Manager
+	var conversationHistory []inference.Message
+
+	if mgr, err := session.NewManager(""); err == nil {
+		sessionMgr = mgr
 	}
 
-	// Get system prompt - prefer database, fall back to generic
+	if opts.resumeID != "" && sessionMgr != nil {
+		sess, msgs, err := sessionMgr.Resume(opts.resumeID)
+		if err != nil {
+			return fmt.Errorf("resume session: %w", err)
+		}
+		conversationHistory = msgs
+		if verbose {
+			fmt.Printf("Resumed session %s (%d messages)\n", sess.ID, len(msgs))
+		}
+	} else if opts.forkID != "" && sessionMgr != nil {
+		// Resume the source session first, then fork it
+		if _, _, err := sessionMgr.Resume(opts.forkID); err != nil {
+			return fmt.Errorf("load session for fork: %w", err)
+		}
+		forked, err := sessionMgr.Fork(opts.sessionName)
+		if err != nil {
+			return fmt.Errorf("fork session: %w", err)
+		}
+		// Reload the forked session's messages
+		_, msgs, err := sessionMgr.Resume(forked.ID)
+		if err != nil {
+			return fmt.Errorf("load forked session: %w", err)
+		}
+		conversationHistory = msgs
+		if verbose {
+			fmt.Printf("Forked session as %s (%d messages)\n", forked.ID, len(msgs))
+		}
+	} else if sessionMgr != nil {
+		sess, err := sessionMgr.Create(".", opts.agentName)
+		if err == nil {
+			if opts.sessionName != "" {
+				sessionMgr.SetName(opts.sessionName)
+			}
+			if verbose {
+				fmt.Printf("Created session %s\n", sess.ID)
+			}
+		}
+	}
+
+	// Initialize memory
+	memMgr := memory.NewManager("", "")
+
+	// Load project instructions
+	var piFormatted string
+	if pi, err := config.FindProjectInstructions(""); err == nil {
+		piFormatted = config.FormatProjectInstructions(pi)
+	}
+
+	// Build enriched system prompt
+	systemPrompt := ""
 	if loadedAgent != nil && loadedAgent.SystemPrompt != "" {
-		req.System = loadedAgent.SystemPrompt
+		systemPrompt = loadedAgent.SystemPrompt
 		if verbose {
 			fmt.Printf("Using system prompt from database (version %d)\n", loadedAgent.Version)
 		}
 	} else {
-		req.System = getGenericSystemPrompt(agentName)
+		systemPrompt = getGenericSystemPrompt(opts.agentName)
+	}
+	if piFormatted != "" {
+		systemPrompt += "\n\n" + piFormatted
+	}
+	if memMgr != nil {
+		if mem := memMgr.FormatForPrompt(); mem != "" {
+			systemPrompt += "\n\n" + mem
+		}
 	}
 
-	// Use streaming if configured
+	// Build messages with conversation history
+	messages := make([]inference.Message, len(conversationHistory))
+	copy(messages, conversationHistory)
+	messages = append(messages, inference.Message{Role: "user", Content: opts.message})
+
+	req := inference.ChatRequest{
+		Model:    modelID,
+		Messages: messages,
+		System:   systemPrompt,
+	}
+
+	// Execute and capture response
+	var responseText string
+
 	if syntorConfig.CLI.StreamResponse {
-		return streamChat(ctx, provider, req)
+		responseText, err = streamChat(ctx, provider, req)
+		if err != nil {
+			return err
+		}
+	} else {
+		resp, err := provider.Chat(ctx, req)
+		if err != nil {
+			return fmt.Errorf("chat failed: %w", err)
+		}
+		responseText = resp.Message.Content
+		fmt.Println(responseText)
+
+		if verbose {
+			fmt.Printf("\n[tokens: %d prompt, %d completion]\n",
+				resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+		}
 	}
 
-	// Non-streaming request
-	resp, err := provider.Chat(ctx, req)
-	if err != nil {
-		return fmt.Errorf("chat failed: %w", err)
-	}
-
-	fmt.Println(resp.Message.Content)
-
-	if verbose {
-		fmt.Printf("\n[tokens: %d prompt, %d completion]\n",
-			resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+	// Save session with new messages
+	if sessionMgr != nil && responseText != "" {
+		messages = append(messages, inference.Message{Role: "assistant", Content: responseText})
+		sessionMgr.AppendMessages(messages, opts.agentName)
 	}
 
 	_ = agentLoader // Silence unused variable warning if loader was created
 	return nil
 }
 
-// streamChat performs a streaming chat request
-func streamChat(ctx context.Context, provider inference.Provider, req inference.ChatRequest) error {
+// streamChat performs a streaming chat request and returns the full response text.
+func streamChat(ctx context.Context, provider inference.Provider, req inference.ChatRequest) (string, error) {
 	stream, err := provider.ChatStream(ctx, req)
 	if err != nil {
-		return fmt.Errorf("stream failed: %w", err)
+		return "", fmt.Errorf("stream failed: %w", err)
 	}
 	defer stream.Close()
+
+	var fullResponse strings.Builder
 
 	for {
 		chunk, err := stream.Next()
@@ -356,10 +450,11 @@ func streamChat(ctx context.Context, provider inference.Provider, req inference.
 			if err.Error() == "EOF" {
 				break
 			}
-			return err
+			return "", err
 		}
 
 		fmt.Print(chunk.Content)
+		fullResponse.WriteString(chunk.Content)
 
 		if chunk.Done {
 			break
@@ -367,7 +462,7 @@ func streamChat(ctx context.Context, provider inference.Provider, req inference.
 	}
 
 	fmt.Println()
-	return nil
+	return fullResponse.String(), nil
 }
 
 // getGenericSystemPrompt returns a generic system prompt for unknown agents
@@ -376,7 +471,11 @@ func getGenericSystemPrompt(agentName string) string {
 	return fmt.Sprintf(`You are the %s agent in the SYNTOR multi-agent system.
 
 ## Guidelines
-- Be helpful and professional
-- Complete the requested task thoroughly
-- Ask clarifying questions if needed`, agentName)
+- Be helpful, thorough, and professional
+- Complete the requested task step by step
+- Ask clarifying questions if the request is ambiguous
+- Provide concise answers unless asked for detail
+- Use markdown formatting for code and structured content
+- When referencing files, include the path
+- Avoid unnecessary preamble — get straight to the answer`, agentName)
 }

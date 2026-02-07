@@ -74,13 +74,16 @@ type VaultConfig struct {
 	FallbackEnabled bool `yaml:"fallback_enabled" json:"fallback_enabled"`
 }
 
+// Quiet suppresses non-error output when true (e.g., in non-verbose CLI mode).
+var Quiet bool
+
 // Manager manages secret providers with caching
 type Manager struct {
-	provider  Provider
-	fallback  Provider // EnvProvider as fallback
-	cache     map[string]cacheEntry
-	cacheTTL  time.Duration
-	mu        sync.RWMutex
+	provider    Provider
+	fallback    Provider // EnvProvider as fallback
+	cache       map[string]cacheEntry
+	cacheTTL    time.Duration
+	mu          sync.RWMutex
 	useFallback bool
 }
 
@@ -105,7 +108,9 @@ func NewManager(cfg Config) (*Manager, error) {
 		if err != nil {
 			if cfg.Vault.FallbackEnabled {
 				// Log warning but continue with env fallback
-				fmt.Fprintf(os.Stderr, "Warning: Vault unavailable, using environment variables: %v\n", err)
+				if !Quiet {
+					fmt.Fprintf(os.Stderr, "Warning: Vault unavailable, using environment variables: %v\n", err)
+				}
 				return &Manager{
 					provider:    fallback,
 					fallback:    fallback,

@@ -6,7 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/syntor/syntor/internal/cli/tui"
+	"github.com/syntor/syntor/pkg/agentdb"
 	"github.com/syntor/syntor/pkg/config"
+	"github.com/syntor/syntor/pkg/vault"
 )
 
 var (
@@ -47,6 +49,10 @@ Manage models:
   syntor models list
   syntor models status`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Suppress infrastructure warnings in non-verbose mode
+		vault.Quiet = !verbose
+		agentdb.Quiet = !verbose
+
 		// Load configuration with secrets resolution
 		cfg, resolver, err := config.LoadSyntorConfigWithSecrets()
 		if err != nil {
@@ -78,6 +84,9 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output in JSON format")
 	rootCmd.PersistentFlags().BoolVar(&simpleMode, "simple", false, "use simple REPL mode (no TUI)")
+
+	// Enable --version flag (cobra built-in)
+	rootCmd.Version = Version
 
 	// Add subcommands
 	rootCmd.AddCommand(versionCmd)
@@ -159,8 +168,14 @@ func runInteractive() error {
 }
 
 func sendMessage(message string) error {
-	// Use SNTR agent by default for single messages
-	return runAgentByName("sntr", message)
+	// Use SNTR agent by default, with session/memory/project-instructions support
+	return runAgentWithOptions(runOptions{
+		agentName:   "sntr",
+		message:     message,
+		resumeID:    resumeSession,
+		forkID:      forkSession,
+		sessionName: sessionName,
+	})
 }
 
 func runSetupWizard() error {

@@ -10,6 +10,9 @@ import (
 	"github.com/syntor/syntor/pkg/prompt"
 )
 
+// Quiet suppresses non-error output when true (e.g., in non-verbose CLI mode).
+var Quiet bool
+
 // UnifiedLoader combines FalkorDB routing with PostgreSQL rich definitions
 // and falls back to manifest-based definitions when database is unavailable
 type UnifiedLoader struct {
@@ -48,7 +51,9 @@ func NewUnifiedLoader(cfg UnifiedLoaderConfig) (*UnifiedLoader, error) {
 		client, err := NewClient(*cfg.AgentDBConfig)
 		if err != nil {
 			// Non-fatal, continue without database
-			fmt.Printf("AgentDB unavailable: %v\n", err)
+			if !Quiet {
+				fmt.Printf("AgentDB unavailable: %v\n", err)
+			}
 		} else {
 			loader.agentDB = client
 		}
@@ -59,7 +64,9 @@ func NewUnifiedLoader(cfg UnifiedLoaderConfig) (*UnifiedLoader, error) {
 		client, err := falkordb.New(*cfg.FalkorDBConfig)
 		if err != nil {
 			// Non-fatal, continue without FalkorDB
-			fmt.Printf("FalkorDB unavailable: %v\n", err)
+			if !Quiet {
+				fmt.Printf("FalkorDB unavailable: %v\n", err)
+			}
 		} else {
 			loader.falkorDB = client
 		}
@@ -70,7 +77,9 @@ func NewUnifiedLoader(cfg UnifiedLoaderConfig) (*UnifiedLoader, error) {
 		store, err := manifest.NewManifestStore(cfg.ManifestPaths)
 		if err != nil {
 			// Non-fatal, continue without manifests
-			fmt.Printf("Manifest store unavailable: %v\n", err)
+			if !Quiet {
+				fmt.Printf("Manifest store unavailable: %v\n", err)
+			}
 		} else {
 			loader.manifestStore = store
 		}

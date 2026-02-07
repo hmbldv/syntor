@@ -44,7 +44,7 @@ func NewSecretResolver(cfg SecretsConfig) (*SecretResolver, error) {
 
 // ResolveConfig resolves all secret references in the configuration
 func (r *SecretResolver) ResolveConfig(ctx context.Context, cfg *SyntorConfig) error {
-	if r.manager.UsingFallback() {
+	if r.manager.UsingFallback() && !vault.Quiet {
 		slog.Warn("secrets: using environment variable fallback (Vault unavailable)")
 	}
 
