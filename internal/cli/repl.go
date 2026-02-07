@@ -101,6 +101,12 @@ func (r *REPL) registerBuiltinCommands() {
 		Handler:     (*REPL).cmdConfig,
 	}
 
+	r.slashCmds["model"] = SlashCommand{
+		Name:        "model",
+		Description: "Show or switch model: /model [name]",
+		Handler:     (*REPL).cmdModel,
+	}
+
 	// Dynamic agent command
 	r.slashCmds["agent"] = SlashCommand{
 		Name:        "agent",
@@ -398,6 +404,18 @@ func (r *REPL) cmdQuit(args string) error {
 
 func (r *REPL) cmdClear(args string) error {
 	fmt.Print("\033[H\033[2J")
+	return nil
+}
+
+func (r *REPL) cmdModel(args string) error {
+	if args == "" {
+		modelID := r.registry.GetModelForAgent(r.currentAgent)
+		fmt.Printf("Current model: %s (agent: %s)\n", modelID, string(r.currentAgent))
+	} else {
+		newModel := strings.TrimSpace(args)
+		r.registry.SetModelForAgent(r.currentAgent, newModel)
+		fmt.Printf("Switched to model: %s\n", newModel)
+	}
 	return nil
 }
 
