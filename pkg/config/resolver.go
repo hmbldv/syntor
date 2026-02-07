@@ -120,12 +120,12 @@ func LoadSyntorConfigWithSecrets() (*SyntorConfig, *SecretResolver, error) {
 		return nil, nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Skip secrets resolution if provider is "env" or not configured
-	if cfg.Integrations.Secrets.Provider == "" || cfg.Integrations.Secrets.Provider == "env" {
+	// Skip secrets resolution if provider is not configured
+	if cfg.Integrations.Secrets.Provider == "" {
 		return cfg, nil, nil
 	}
 
-	// Create resolver
+	// Create resolver (env provider or vault provider)
 	resolver, err := NewSecretResolver(cfg.Integrations.Secrets)
 	if err != nil {
 		// If fallback is enabled and we got an error, try to continue with env provider
