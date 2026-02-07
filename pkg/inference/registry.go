@@ -15,7 +15,7 @@ type AgentType string
 // These are kept only to prevent breaking existing code during migration
 const (
 	AgentSNTR          AgentType = "sntr"          // Primary orchestration agent
-	AgentCoordination  AgentType = "sntr"          // Alias for backwards compatibility
+	AgentCoordination  AgentType = "coordination"   // Separate agent type for coordination
 	AgentDocumentation AgentType = "documentation"
 	AgentGit           AgentType = "git"
 	AgentWorker        AgentType = "worker"
@@ -145,6 +145,7 @@ var AvailableModels = []Model{
 // DEPRECATED: These are fallbacks only - prefer database-loaded configurations
 var DefaultModelAssignments = map[AgentType]string{
 	AgentSNTR:          "mistral:7b",
+	AgentCoordination:  "deepseek-r1:8b",
 	AgentDocumentation: "phi4:14b",
 	AgentGit:           "mistral:7b",
 	AgentWorker:        "mistral:7b",
