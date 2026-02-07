@@ -297,7 +297,7 @@ func (r *REPL) sendMessage(message string) error {
 		Messages: []inference.Message{
 			{Role: "user", Content: message},
 		},
-		System: getGenericSystemPrompt(string(r.currentAgent)),
+		System: getGenericSystemPrompt(string(r.currentAgent), getRuntimeContext(string(r.currentAgent), modelID, provider.Name())),
 	}
 
 	// Stream response

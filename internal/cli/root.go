@@ -88,6 +88,9 @@ func init() {
 	// Enable --version flag (cobra built-in)
 	rootCmd.Version = Version
 
+	// Chat-specific flags
+	chatCmd.Flags().StringVarP(&agentModel, "model", "m", "", "override model for this chat message")
+
 	// Add subcommands
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(modelsCmd)

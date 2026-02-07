@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -250,6 +251,7 @@ func runAgentWithOptions(opts runOptions) error {
 	// Try to initialize agentdb loader for dynamic resolution
 	var agentLoader *agentdb.UnifiedLoader
 	var loadedAgent *agentdb.LoadedAgent
+	agentFoundInDB := false
 
 	if syntorConfig.Integrations.AgentDB.Enabled {
 		if loader, err := getAgentLoader(); err == nil {
@@ -259,10 +261,16 @@ func runAgentWithOptions(opts runOptions) error {
 			// Load agent definition
 			if loaded, err := loader.LoadAgent(ctx, opts.agentName); err == nil {
 				loadedAgent = loaded
+				agentFoundInDB = true
 			} else if verbose {
 				fmt.Printf("Agent %s not found in database, using fallback\n", opts.agentName)
 			}
 		}
+	}
+
+	// Validate agent name — if not found in DB and not a known built-in, error out
+	if !agentFoundInDB && !isKnownAgent(opts.agentName) {
+		return fmt.Errorf("agent not found: %s\nUse 'syntor agents list' to see available agents, or 'syntor run sntr' for the default coordinator", opts.agentName)
 	}
 
 	// Determine model - prefer database, fall back to default
@@ -372,23 +380,57 @@ func runAgentWithOptions(opts runOptions) error {
 		piFormatted = config.FormatProjectInstructions(pi)
 	}
 
+	// Build runtime context for system prompt enrichment
+	rc := getRuntimeContext(opts.agentName, modelID, provider.Name())
+
 	// Build enriched system prompt
 	systemPrompt := ""
 	if loadedAgent != nil && loadedAgent.SystemPrompt != "" {
 		systemPrompt = loadedAgent.SystemPrompt
+		// Append runtime context even for DB-loaded agents
+		systemPrompt += fmt.Sprintf("\n\n## Runtime Environment\n- System: %s\n- Model: %s (via %s)\n- SYNTOR version: %s",
+			rc.getSystemLabel(), rc.ModelID, rc.ProviderName, rc.Version)
 		if verbose {
 			fmt.Printf("Using system prompt from database (version %d)\n", loadedAgent.Version)
 		}
 	} else {
-		systemPrompt = getGenericSystemPrompt(opts.agentName)
+		// Use agent personality if available, otherwise generic
+		if personality := getAgentPersonality(opts.agentName); personality != "" {
+			systemPrompt = fmt.Sprintf(`%s
+
+## Your Environment
+- **System:** %s
+- **Model:** %s (via %s)
+- **SYNTOR version:** %s
+
+## Guidelines
+- Be helpful, thorough, and professional
+- Complete the requested task step by step
+- Provide concise answers unless asked for detail
+- Use markdown formatting for code and structured content
+- When asked about yourself, describe your actual environment above — never fabricate or guess system details`,
+				personality, rc.getSystemLabel(), rc.ModelID, rc.ProviderName, rc.Version)
+		} else {
+			systemPrompt = getGenericSystemPrompt(opts.agentName, rc)
+		}
 	}
 	if piFormatted != "" {
 		systemPrompt += "\n\n" + piFormatted
+		if verbose {
+			fmt.Printf("Injected project instructions (%d bytes)\n", len(piFormatted))
+		}
 	}
 	if memMgr != nil {
 		if mem := memMgr.FormatForPrompt(); mem != "" {
 			systemPrompt += "\n\n" + mem
+			if verbose {
+				fmt.Printf("Injected memory context (%d bytes)\n", len(mem))
+			}
 		}
+	}
+
+	if verbose {
+		fmt.Printf("System prompt total: %d bytes\n", len(systemPrompt))
 	}
 
 	// Build messages with conversation history
@@ -467,8 +509,53 @@ func streamChat(ctx context.Context, provider inference.Provider, req inference.
 
 // getGenericSystemPrompt returns a generic system prompt for unknown agents
 // This is only used when the database is unavailable or agent not found
-func getGenericSystemPrompt(agentName string) string {
-	return fmt.Sprintf(`You are the %s agent in the SYNTOR multi-agent system.
+// runtimeContext holds information about the current execution environment
+// for injection into the system prompt.
+type runtimeContext struct {
+	AgentName    string
+	ModelID      string
+	ProviderName string
+	Hostname     string
+	OS           string
+	Arch         string
+	Version      string
+}
+
+func getRuntimeContext(agentName, modelID, providerName string) runtimeContext {
+	hostname, _ := os.Hostname()
+	return runtimeContext{
+		AgentName:    agentName,
+		ModelID:      modelID,
+		ProviderName: providerName,
+		Hostname:     hostname,
+		OS:           runtime.GOOS,
+		Arch:         runtime.GOARCH,
+		Version:      Version,
+	}
+}
+
+// getSystemLabel returns a human-friendly label for the current system.
+func (rc runtimeContext) getSystemLabel() string {
+	switch {
+	case rc.OS == "darwin":
+		return fmt.Sprintf("macOS (%s)", rc.Hostname)
+	case rc.OS == "linux" && strings.Contains(strings.ToLower(rc.Hostname), "kali"):
+		return fmt.Sprintf("Kali Linux (%s)", rc.Hostname)
+	case rc.OS == "linux":
+		return fmt.Sprintf("Linux (%s)", rc.Hostname)
+	default:
+		return fmt.Sprintf("%s/%s (%s)", rc.OS, rc.Arch, rc.Hostname)
+	}
+}
+
+func getGenericSystemPrompt(agentName string, rc runtimeContext) string {
+	return fmt.Sprintf(`You are the %s agent in SYNTOR, a multi-agent AI orchestration system.
+
+## Your Environment
+- **System:** %s
+- **Model:** %s (via %s)
+- **SYNTOR version:** %s
+- **Agent name:** %s
 
 ## Guidelines
 - Be helpful, thorough, and professional
@@ -477,5 +564,37 @@ func getGenericSystemPrompt(agentName string) string {
 - Provide concise answers unless asked for detail
 - Use markdown formatting for code and structured content
 - When referencing files, include the path
-- Avoid unnecessary preamble — get straight to the answer`, agentName)
+- Avoid unnecessary preamble — get straight to the answer
+- When asked about yourself, describe your actual environment above — never fabricate or guess system details`, agentName, rc.getSystemLabel(), rc.ModelID, rc.ProviderName, rc.Version, rc.AgentName)
+}
+
+// knownAgents maps agent names to their personality/focus descriptions.
+// Used for fallback when AgentDB is unreachable.
+var knownAgents = map[string]string{
+	"sntr":    "You are the SNTR coordinator agent. You help users by understanding their request and routing to the right specialist agent if needed. You are a general-purpose assistant with access to the full SYNTOR system.",
+	"coder":   "You are the Coder agent, specializing in software development. You write clean, efficient, well-tested code. You are proficient in Go, Python, TypeScript, and shell scripting.",
+	"paladin": "You are the Paladin agent, specializing in cybersecurity. You perform security assessments, identify vulnerabilities, recommend hardening measures, and follow OWASP best practices.",
+	"thesis":  "You are the Thesis agent, specializing in deep research and investigation. You analyze sources critically, synthesize findings, and produce well-structured research outputs.",
+	"anvil":   "You are the Anvil agent, the technical lead. You handle architecture reviews, build systems, and development lifecycle decisions.",
+	"hive":    "You are the Hive agent, specializing in database and dashboard operations. You write SQL queries, manage schemas, and create Metabase dashboards.",
+	"kuber":   "You are the Kuber agent, specializing in Kubernetes platform operations. You manage clusters, helm releases, and container orchestration.",
+	"netty":   "You are the Netty agent, specializing in network infrastructure. You handle firewall rules, DNS, VLANs, and network troubleshooting.",
+	"triage":  "You are the Triage agent, specializing in IT diagnostics and troubleshooting. You diagnose system health issues and identify root causes.",
+	"amil":    "You are the Amil agent, the financial strategist. You handle budgets, financial planning, and spending analysis.",
+	"chorus":  "You are the Chorus agent, specializing in communications strategy. You craft clear, professional messages and coordinate team communications.",
+	"marq":    "You are the Marq agent, specializing in personal brand strategy and positioning.",
+	"dispatch":"You are the Dispatch agent, handling agent architecture triage and routing feedback.",
+	"apex":    "You are the Apex agent, the agent architecture leader. You design and coordinate the multi-agent system.",
+}
+
+// isKnownAgent returns true if the agent name is a recognized built-in agent.
+func isKnownAgent(name string) bool {
+	_, ok := knownAgents[strings.ToLower(name)]
+	return ok
+}
+
+// getAgentPersonality returns the personality description for a known agent,
+// or empty string if not found.
+func getAgentPersonality(name string) string {
+	return knownAgents[strings.ToLower(name)]
 }

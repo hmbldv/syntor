@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -176,15 +177,59 @@ func listLocalSessions() error {
 		if !entry.IsDir() {
 			continue
 		}
+		id := entry.Name()
+		name := id // Default: show ID as name
+
+		// Try to read session name from session.json
+		sessionFile := filepath.Join(sessionsDir, id, "session.json")
+		if data, err := os.ReadFile(sessionFile); err == nil {
+			name = extractSessionName(data, id)
+		}
+
 		info, _ := entry.Info()
 		modTime := "unknown"
 		if info != nil {
 			modTime = info.ModTime().Format("2006-01-02 15:04")
 		}
-		fmt.Printf("%-12s %-30s %-20s\n", entry.Name(), entry.Name(), modTime)
+		fmt.Printf("%-12s %-30s %-20s\n", id[:minInt(12, len(id))], truncateStr(name, 30), modTime)
 	}
 
 	return nil
+}
+
+// extractSessionName reads the "name" field from session.json bytes.
+// Falls back to defaultName if parsing fails or name is empty.
+func extractSessionName(data []byte, defaultName string) string {
+	// Simple JSON extraction without importing encoding/json
+	// Look for "name":"value" pattern
+	s := string(data)
+	idx := strings.Index(s, `"name"`)
+	if idx < 0 {
+		return defaultName
+	}
+	rest := s[idx+6:]
+	// Skip whitespace and colon
+	rest = strings.TrimLeft(rest, " \t\n\r:")
+	if len(rest) == 0 || rest[0] != '"' {
+		return defaultName
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return defaultName
+	}
+	name := rest[:end]
+	if name == "" {
+		return defaultName
+	}
+	return name
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func runInteractiveWithSession() error {
@@ -240,27 +285,65 @@ func deleteSession(sessionID string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		if err := heraldClient.TerminateSession(ctx, sessionID); err != nil {
+		if err := heraldClient.TerminateSession(ctx, sessionID); err == nil {
+			fmt.Printf("Deleted session %s\n", sessionID)
+			return nil
+		}
+		// Herald failed, fall through to local delete
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Herald delete failed, trying local...\n")
+		}
+	}
+
+	// Delete local session — try exact match first, then partial ID/name match
+	sessionsDir := getSessionsDir()
+	sessionDir := filepath.Join(sessionsDir, sessionID)
+
+	// Try exact directory match
+	if _, err := os.Stat(sessionDir); err == nil {
+		if err := os.RemoveAll(sessionDir); err != nil {
 			return fmt.Errorf("failed to delete session: %w", err)
 		}
 		fmt.Printf("Deleted session %s\n", sessionID)
 		return nil
 	}
 
-	// Delete local session
-	sessionsDir := getSessionsDir()
-	sessionDir := filepath.Join(sessionsDir, sessionID)
-
-	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+	// Try partial ID or name match
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
-	if err := os.RemoveAll(sessionDir); err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+		// Match by partial ID prefix
+		if strings.HasPrefix(id, sessionID) {
+			dir := filepath.Join(sessionsDir, id)
+			if err := os.RemoveAll(dir); err != nil {
+				return fmt.Errorf("failed to delete session: %w", err)
+			}
+			fmt.Printf("Deleted session %s\n", id)
+			return nil
+		}
+		// Match by session name
+		sessionFile := filepath.Join(sessionsDir, id, "session.json")
+		if data, err := os.ReadFile(sessionFile); err == nil {
+			name := extractSessionName(data, "")
+			if name == sessionID {
+				dir := filepath.Join(sessionsDir, id)
+				if err := os.RemoveAll(dir); err != nil {
+					return fmt.Errorf("failed to delete session: %w", err)
+				}
+				fmt.Printf("Deleted session %s (%s)\n", id, name)
+				return nil
+			}
+		}
 	}
 
-	fmt.Printf("Deleted session %s\n", sessionID)
-	return nil
+	return fmt.Errorf("session not found: %s", sessionID)
 }
 
 func getHeraldClient() (*herald.Client, error) {
