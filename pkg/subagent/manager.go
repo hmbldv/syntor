@@ -317,9 +317,8 @@ func (m *Manager) Cancel(ctx context.Context, agentID string) error {
 }
 
 // Parallel spawns multiple sub-agents and runs them in parallel.
+// Delegates to ParallelExecutor to enforce MaxConcurrent worker pool limits.
 func (m *Manager) Parallel(ctx context.Context, req ParallelRequest) (*ParallelResult, error) {
-	start := time.Now()
-
 	// Set timeout
 	execCtx := ctx
 	if req.Timeout > 0 {
@@ -328,72 +327,21 @@ func (m *Manager) Parallel(ctx context.Context, req ParallelRequest) (*ParallelR
 		defer cancel()
 	}
 
-	// Spawn all agents
-	var wg sync.WaitGroup
-	resultCh := make(chan struct {
-		id     string
-		result *Result
-		err    error
-	}, len(req.Agents))
-
-	failFastCtx, failFastCancel := context.WithCancel(execCtx)
-	defer failFastCancel()
-
-	for _, spawnReq := range req.Agents {
-		wg.Add(1)
-		go func(sr SpawnRequest) {
-			defer wg.Done()
-
-			agent, err := m.SpawnAndWait(failFastCtx, sr)
-			if err != nil {
-				resultCh <- struct {
-					id     string
-					result *Result
-					err    error
-				}{sr.Name, nil, err}
-
-				if req.FailFast {
-					failFastCancel()
-				}
-				return
-			}
-
-			resultCh <- struct {
-				id     string
-				result *Result
-				err    error
-			}{agent.ID, agent.Result, nil}
-
-			if req.FailFast && agent.Result != nil && !agent.Result.Success {
-				failFastCancel()
-			}
-		}(spawnReq)
+	// Use fail-fast context if requested
+	if req.FailFast {
+		var failFastCancel context.CancelFunc
+		execCtx, failFastCancel = context.WithCancel(execCtx)
+		defer failFastCancel()
 	}
 
-	// Wait for all to complete
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	// Collect results
-	parallelResult := &ParallelResult{
-		Results: make(map[string]*Result),
+	// Enforce MaxConcurrent via ParallelExecutor's worker pool
+	maxWorkers := m.config.MaxConcurrent
+	if maxWorkers <= 0 {
+		maxWorkers = 5
 	}
 
-	for r := range resultCh {
-		if r.err != nil || (r.result != nil && !r.result.Success) {
-			parallelResult.Failed = append(parallelResult.Failed, r.id)
-		} else {
-			parallelResult.Completed = append(parallelResult.Completed, r.id)
-		}
-		if r.result != nil {
-			parallelResult.Results[r.id] = r.result
-		}
-	}
-
-	parallelResult.Duration = time.Since(start)
-	return parallelResult, nil
+	executor := NewParallelExecutor(m, maxWorkers)
+	return executor.ExecuteAll(execCtx, req.Agents)
 }
 
 // Trust Management
