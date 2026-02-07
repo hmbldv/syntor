@@ -156,6 +156,9 @@ type Model struct {
 	height int
 	ready  bool
 
+	// Version
+	version string
+
 	// Quitting
 	quitting bool
 	err      error
@@ -388,9 +391,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Add startup banner on first render
 		if firstRender && len(m.messages) == 0 {
+			version := m.version
+			if version == "" || version == "dev" {
+				version = "dev"
+			}
 			m.messages = append(m.messages, ChatMessage{
 				Role:    "system",
-				Content: GetStartupBanner("v1.0.0", msg.Width) + GetWelcomeMessage(),
+				Content: GetStartupBanner(version, msg.Width) + GetWelcomeMessage(),
 			})
 		}
 
@@ -527,6 +534,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ModelWarmupMsg:
 		if msg.Success {
 			m.addSystemMessage("Model loaded and ready.")
+		} else {
+			modelID := m.registry.GetModelForAgent(m.currentAgent)
+			m.addSystemMessage(fmt.Sprintf(
+				"Model %s not available. Run: ollama pull %s\nOr use /model <name> to switch.",
+				modelID, modelID))
 		}
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -1010,6 +1022,19 @@ func (m Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
+	case "model":
+		if args == "" {
+			modelID := m.registry.GetModelForAgent(m.currentAgent)
+			m.addSystemMessage(fmt.Sprintf("Current model: %s (agent: %s)", modelID, string(m.currentAgent)))
+		} else {
+			newModel := strings.TrimSpace(args)
+			m.registry.SetModelForAgent(m.currentAgent, newModel)
+			m.addSystemMessage(fmt.Sprintf("Switched to model: %s", newModel))
+		}
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+		return m, nil
+
 	case "agent":
 		return m.handleAgentSwitch(args)
 
@@ -1338,6 +1363,12 @@ func (m Model) sendMessage(message string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return StreamErrorMsg{Err: err} }
 	}
 
+	// Use streaming if config enables it
+	if m.config != nil && m.config.CLI.StreamResponse {
+		// Add placeholder assistant message for streaming
+		m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: "", Agent: getAgentDisplayName(m.currentAgent)})
+		return m, tea.Batch(m.streamChat(ctx, provider, modelID, message), DoTick())
+	}
 	// Return commands to get full response and tick for activity updates
 	return m, tea.Batch(m.fetchResponse(ctx, provider, modelID, message), DoTick())
 }
@@ -2964,6 +2995,7 @@ func (m *Model) executeHandoff(intent *coordination.HandoffIntent) tea.Cmd {
 // RunOptions configures TUI startup behavior.
 type RunOptions struct {
 	ResumeSessionID string // If set, resume this session
+	Version         string // Build version for banner display
 }
 
 // Run starts the TUI with optional configuration.
@@ -2974,6 +3006,9 @@ func Run(cfg *config.SyntorConfig, opts ...RunOptions) error {
 	}
 
 	// Apply options
+	if len(opts) > 0 && opts[0].Version != "" {
+		model.version = opts[0].Version
+	}
 	if len(opts) > 0 && opts[0].ResumeSessionID != "" {
 		// Initialize session manager and resume
 		mgr, err := session.NewManager("")

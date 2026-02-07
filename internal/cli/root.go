@@ -167,6 +167,7 @@ func runInteractive() error {
 	// Default: use TUI mode with optional resume
 	return tui.Run(syntorConfig, tui.RunOptions{
 		ResumeSessionID: resumeID,
+		Version:         Version,
 	})
 }
 

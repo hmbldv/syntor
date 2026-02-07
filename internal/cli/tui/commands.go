@@ -82,6 +82,11 @@ func (r *CommandRegistry) registerBuiltinCommands() {
 		Description: "List available models",
 		Category:    "system",
 	}
+	r.commands["model"] = Command{
+		Name:        "model",
+		Description: "Show or switch model (/model [name])",
+		Category:    "system",
+	}
 	r.commands["config"] = Command{
 		Name:        "config",
 		Description: "Show configuration",
