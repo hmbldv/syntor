@@ -14,7 +14,7 @@ import (
 
 // Config holds Herald client configuration.
 type Config struct {
-	// BaseURL is the Herald session manager URL (e.g., http://192.168.1.61:8090)
+	// BaseURL is the Herald session manager URL (e.g., http://localhost:8090)
 	BaseURL string `yaml:"base_url" json:"base_url"`
 
 	// Timeout for HTTP requests
@@ -36,7 +36,7 @@ type Config struct {
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		BaseURL:          "http://192.168.1.61:8090",
+		BaseURL:          "http://localhost:8090",
 		Timeout:          30 * time.Second,
 		RetryAttempts:    3,
 		RetryDelay:       500 * time.Millisecond,

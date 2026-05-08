@@ -33,7 +33,7 @@ type Config struct {
 // DefaultConfig returns the default configuration
 func DefaultConfig() Config {
 	return Config{
-		Host:     "192.168.1.61",
+		Host:     "localhost",
 		Port:     5433,
 		Database: "hive",
 		Schema:   "agents",

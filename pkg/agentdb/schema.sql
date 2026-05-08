@@ -1,5 +1,5 @@
 -- Agent Database Schema for SYNTOR
--- Database: HIVE (192.168.1.61:5433)
+-- Database: HIVE (localhost:5433)
 -- Schema: agents
 
 -- Create schema

@@ -270,7 +270,7 @@ func DefaultIntegrationsConfig() IntegrationsConfig {
 			CacheTTL: 5 * time.Minute,
 			Vault: VaultSecretsConfig{
 				Enabled:         true,
-				Address:         "http://192.168.1.61:8200",
+				Address:         "http://localhost:8200",
 				AuthMethod:      "token",
 				MountPath:       "secret",
 				PathPrefix:      "syntor",
@@ -280,20 +280,20 @@ func DefaultIntegrationsConfig() IntegrationsConfig {
 		},
 		Herald: HeraldConfig{
 			Enabled:          true,
-			BaseURL:          "http://192.168.1.61:8090",
+			BaseURL:          "http://localhost:8090",
 			Timeout:          30 * time.Second,
 			DefaultTrustTier: 1,
 		},
 		FalkorDB: FalkorDBConfig{
 			Enabled:   true,
-			Address:   "192.168.1.61:6379",
+			Address:   "localhost:6379",
 			GraphName: "agents",
 			Timeout:   10 * time.Second,
 			CacheTTL:  5 * time.Minute,
 		},
 		AgentDB: AgentDBConfig{
 			Enabled:        true,
-			Host:           "192.168.1.61",
+			Host:           "localhost",
 			Port:           5433,
 			Database:       "hive",
 			Schema:         "agents",
@@ -351,13 +351,13 @@ func DefaultIntegrationsConfig() IntegrationsConfig {
 				Enabled: true,
 			},
 			Forge: HostSystemConfig{
-				Host:     "192.168.1.61",
-				SSHAlias: "lnx-rig",
+				Host:     "localhost",
+				SSHAlias: "remote-host",
 				Type:     "linux",
 				Enabled:  true,
 			},
 			Pali: HostSystemConfig{
-				Host:     "10.211.55.9",
+				Host:     "",
 				SSHAlias: "pali",
 				Type:     "kali",
 				Enabled:  true,
@@ -387,7 +387,7 @@ func ExampleConfigYAML() string {
 
 inference:
   provider: ollama           # LOCAL FIRST - Herald routes to Ollama
-  ollama_host: http://192.168.1.61:11434
+  ollama_host: http://localhost:11434
   default_model: qwen2.5-coder:32b
   auto_pull: true
   models:
@@ -408,7 +408,7 @@ integrations:
     cache_ttl: 5m
     vault:
       enabled: true
-      address: http://192.168.1.61:8200
+      address: http://localhost:8200
       auth_method: token      # or "approle" for production
       mount_path: secret
       path_prefix: syntor
@@ -420,19 +420,19 @@ integrations:
 
   herald:
     enabled: true
-    base_url: http://192.168.1.61:8090
+    base_url: http://localhost:8090
     timeout: 30s
     default_trust_tier: 1   # T1 = Read-Only by default
 
   falkordb:
     enabled: true
-    address: 192.168.1.61:6379
+    address: localhost:6379
     graph_name: agents
     cache_ttl: 5m
 
   agentdb:
     enabled: true
-    host: 192.168.1.61
+    host: localhost
     port: 5433
     database: hive
     schema: agents
@@ -482,12 +482,12 @@ integrations:
       type: mac
       enabled: true
     forge:
-      host: 192.168.1.61
-      ssh_alias: lnx-rig
+      host: localhost
+      ssh_alias: remote-host
       type: linux
       enabled: true
     pali:
-      host: 10.211.55.9
+      host: ""
       ssh_alias: pali
       type: kali
       enabled: true

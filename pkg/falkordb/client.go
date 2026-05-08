@@ -12,7 +12,7 @@ import (
 
 // Config holds FalkorDB client configuration.
 type Config struct {
-	// Address is the Redis/FalkorDB server address (e.g., 192.168.1.61:6379)
+	// Address is the Redis/FalkorDB server address (e.g., localhost:6379)
 	Address string `yaml:"address" json:"address"`
 
 	// Password for authentication (if required)
@@ -37,7 +37,7 @@ type Config struct {
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		Address:   "192.168.1.61:6379",
+		Address:   "localhost:6379",
 		Database:  0,
 		GraphName: "agents",
 		Timeout:   10 * time.Second,

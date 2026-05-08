@@ -239,7 +239,7 @@ func DefaultConfig() Config {
 		CacheTTL: 5 * time.Minute,
 		Vault: VaultConfig{
 			Enabled:         true,
-			Address:         "http://192.168.1.61:8200",
+			Address:         "http://localhost:8200",
 			AuthMethod:      "token",
 			MountPath:       "secret",
 			PathPrefix:      "syntor",
